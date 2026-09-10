@@ -1,4 +1,5 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import type { Workflow } from "../../packages/contracts/src/index";
 // Reuse the authenticated session in memory so UI scenarios respect the login
 // rate limit while keeping separate browser contexts and testing real sign-in.
 let sessionCookies: Awaited<ReturnType<BrowserContext["cookies"]>> | undefined;
@@ -390,7 +391,10 @@ test("mobile navigation, tool form scrolling, and settings are usable", async ({
     page.getByRole("button", { name: "Create tool", exact: true }),
   ).toBeFocused();
   await page.getByRole("button", { name: "Toggle navigation" }).click();
-  await page.getByRole("link", { name: "Workflows", exact: true }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("link", { name: "Workflows", exact: true })
+    .click();
   await page.getByRole("table").getByRole("link").first().click();
   const node = page.locator('.react-flow__node[data-id="email"]');
   await node.click();
@@ -583,7 +587,10 @@ test("Back and Forward preserve separate drafts and canvas state through bootstr
   await page.goBack();
   await page.getByRole("link", { name: "Run history", exact: true }).click();
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await page.getByRole("link", { name: "Workflows", exact: true }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("link", { name: "Workflows", exact: true })
+    .click();
   await page.getByRole("link", { name: second.name, exact: true }).click();
   await expect(
     page.getByRole("heading", { name: second.name + " unsaved", exact: true }),
@@ -726,6 +733,50 @@ test("desktop and mobile management and run inspector screenshots", async ({
   page,
 }) => {
   await signIn(page);
+  const headers = { Origin: new URL(page.url()).origin };
+  const credential = await page.request.post("/api/credentials", {
+    headers,
+    data: { name: "Screenshot fixture", kind: "api", secret: "synthetic-only" },
+  });
+  expect(credential.ok()).toBe(true);
+  const created = await page.request.post("/api/workflows", {
+    headers,
+    data: { name: "Screenshot receipt " + Date.now(), template: "receipt" },
+  });
+  expect(created.ok()).toBe(true);
+  const workflow = (await created.json()) as { id: string; draft: Workflow };
+  const inbox = workflow.draft.nodes.find((node) => node.type === "email")!;
+  inbox.data.recipient = `screenshot-${workflow.id}@example.com`;
+  expect(
+    (
+      await page.request.put(`/api/workflows/${workflow.id}`, {
+        headers,
+        data: workflow.draft,
+      })
+    ).ok(),
+  ).toBe(true);
+  expect(
+    (
+      await page.request.post(`/api/workflows/${workflow.id}/publish`, {
+        headers,
+      })
+    ).ok(),
+  ).toBe(true);
+  const queued = await page.request.post(`/api/workflows/${workflow.id}/test`, {
+    headers,
+  });
+  expect(queued.ok()).toBe(true);
+  const run = (await queued.json()) as { id: string };
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(`/api/runs/${run.id}`);
+        expect(response.ok()).toBe(true);
+        return (await response.json()).status;
+      },
+      { timeout: 30000 },
+    )
+    .toBe("succeeded");
   for (const viewport of [
     { width: 1440, height: 1000 },
     { width: 390, height: 844 },
@@ -1004,10 +1055,12 @@ test("Add step Outcome source selection supports keyboard, cancellation and exis
   await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("button", { name: "Add step", exact: true }).click();
   await page.getByRole("menuitem", { name: "Outcome", exact: true }).click();
+  await expect(dialog.getByLabel("Source agent")).toBeFocused();
   await expect(
     dialog.getByLabel("Source agent").locator('option[value="agent"]'),
   ).toHaveCount(0);
   await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Saved");
   await page.reload();

@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { resolve } from "node:path";
 try {
   process.loadEnvFile(".env");
 } catch {
@@ -18,7 +19,14 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "pnpm dev",
+      command: process.env.CI
+        ? "pnpm --filter @platform/web start"
+        : "pnpm dev",
+      env: {
+        ATTACHMENT_DIR: resolve(
+          process.env.ATTACHMENT_DIR ?? ".data/attachments",
+        ),
+      },
       url: (process.env.APP_URL ?? "http://localhost:3000") + "/login",
       reuseExistingServer: !process.env.CI,
       timeout: 120000,

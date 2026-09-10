@@ -12,6 +12,7 @@ Reviewed the whole repository before its first push to `origin/main`. The review
 - **Expected publication errors could become HTTP 500s.** Domain configuration failures now have a dedicated error class, preserving the existing JSON error envelope and returning HTTP 400 without matching exception message prefixes.
 - **Large settings components obscured behavior.** Agent and Outcome settings are separate feature components using the existing Mantine composition. Canvas geometry, styling, scrolling and workflow draft ownership remain unchanged.
 - **Publication hygiene needed repeatable checks.** Formatting is enforced in CI. Next.js generated declarations are ignored and regenerated before type checking, following the installed Next.js documentation. Environment files, attachments, screenshots and build output remain excluded from Git.
+- **The first CI run exposed browser fixture and startup assumptions.** CI now tests the production build instead of compiling routes during assertions. Navigation selectors identify the sidebar, and management screenshots create their own credential, workflow and completed run. Diagnostic uploads are best-effort with seven-day retention because the account's artifact storage quota prevented uploads; verification failures still fail CI.
 
 The changes preserve published snapshots, migration history, checkpoint version 2 and legacy decoding, agent completion rules, and the editor/API contract. No new database migration or dependency was required for the cleanup.
 
