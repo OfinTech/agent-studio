@@ -12,7 +12,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Follow the root `AGENTS.md` Mantine policy. Use Mantine components as provided; compose components and documented props first. Customize only for functional requirements, accessibility, or a demonstrated integration limitation, never personal visual preference.
 
-Keep the default light Mantine provider, system typography, colors, and component sizes. Use `md` layout spacing, filled primary buttons, default secondary buttons, and Mantine red for destructive actions. Documented component patterns may use other built-in tokens. Do not introduce custom themes, general-purpose wrappers, custom fonts, competing UI libraries, utility CSS, copied internals, or patches.
+Keep the Mantine provider forced to the dark color scheme, with system typography, colors, and component sizes. Use `md` layout spacing, filled primary buttons, default secondary buttons, and Mantine red for destructive actions. Documented component patterns may use other built-in tokens. Do not introduce custom themes, general-purpose wrappers, custom fonts, competing UI libraries, utility CSS, copied internals, or patches.
 
 The shell uses a 60px header, 240px navigation collapsed below `sm`, and a full-width canvas when no step is selected. Selection opens a 3:1 canvas/settings layout above `md` and a Mantine Drawer below it. The editor fills the remaining dynamic viewport height below the header, notices, and toolbar. The canvas and independently scrolling desktop settings panel share that available height; do not restore fixed pixel heights. Keep the workflow draft authoritative, preserve measured dimensions and workflow-specific canvas state, and use `@mantine/form` for login and dialogs.
 

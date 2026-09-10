@@ -194,6 +194,7 @@ export function WorkflowCanvas({
   return (
     <Box className={classes.canvas} data-testid="workflow-canvas">
       <ReactFlow
+        colorMode="dark"
         nodes={flowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}

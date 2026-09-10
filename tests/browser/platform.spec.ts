@@ -269,7 +269,7 @@ test("tool creator validates destinations and saves declarative tools", async ({
   await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
 });
 
-test("login reports accessible field errors and uses default light styling", async ({
+test("login reports accessible field errors and uses the forced dark color scheme", async ({
   page,
 }) => {
   await page.goto("/login");
@@ -293,7 +293,7 @@ test("login reports accessible field errors and uses default light styling", asy
   );
   await expect(page.locator("html")).toHaveAttribute(
     "data-mantine-color-scheme",
-    "light",
+    "dark",
   );
   await page.screenshot({
     animations: "disabled",
