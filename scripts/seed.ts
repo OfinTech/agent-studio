@@ -12,5 +12,9 @@ await query(
   "INSERT INTO workflows(id,draft) VALUES($1,$2) ON CONFLICT DO NOTHING",
   ["receipt-example", JSON.stringify(receiptWorkflow)],
 );
+await query(
+  "INSERT INTO settings(key,value) VALUES('TOOL_ALLOWED_ORIGINS',$1) ON CONFLICT DO NOTHING",
+  [new URL(tool.endpoint).origin],
+);
 await pool.end();
 console.log("Receipt example seeded as a draft. Publish it in the builder.");

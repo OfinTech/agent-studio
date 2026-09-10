@@ -12,6 +12,7 @@ import {
 import { ApplicationShell } from "./application-shell";
 import { Credentials, CredentialDialog } from "./credentials";
 import { MockReceipts } from "./mock-receipts";
+import { SettingsView } from "./settings";
 import { RunHistory, RunInspector } from "./run-inspection";
 import { Tools, ToolDialog } from "./tools";
 import { usePlatform } from "./use-platform";
@@ -55,6 +56,8 @@ export function Platform({ children }: { children: React.ReactNode }) {
           <Credentials controller={c} />
         ) : c.view === "mock-receipts" ? (
           <MockReceipts controller={c} />
+        ) : c.view === "settings" ? (
+          <SettingsView controller={c} />
         ) : (
           <RunHistory controller={c} />
         )}

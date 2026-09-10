@@ -45,6 +45,12 @@ export type Bootstrap = {
   credentials: Credential[];
   runs: Run[];
   adminEmail: string;
+  settings: {
+    TOOL_ALLOWED_ORIGINS: string;
+    MAX_ATTACHMENT_BYTES: string;
+    RESEND_API_KEY: boolean;
+    RESEND_WEBHOOK_SECRET: boolean;
+  };
 };
 export async function api(path: string, method = "GET", body?: unknown) {
   const response = await fetch("/api/" + path, {

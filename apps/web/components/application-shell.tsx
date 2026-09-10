@@ -18,6 +18,7 @@ import {
   KeyRound,
   LayoutGrid,
   LogOut,
+  Settings,
   Wrench,
 } from "lucide-react";
 import Link from "next/link";
@@ -28,6 +29,7 @@ const navigation = [
   { id: "tools", label: "MCP tools", icon: Wrench },
   { id: "credentials", label: "Credentials", icon: KeyRound },
   { id: "mock-receipts", label: "Mock receipts", icon: Inbox },
+  { id: "settings", label: "Settings", icon: Settings },
 ] as const;
 export function ApplicationShell({
   controller: c,

@@ -2,6 +2,7 @@ import { Webhook } from "svix";
 import { z } from "zod";
 import type { Email, Attachment } from "../../contracts/src/index";
 import { boundedRequest, NetworkError } from "./network";
+import { setting } from "../../persistence/src/settings";
 import { LocalStorage } from "./storage";
 export { LocalStorage, validateAttachment } from "./storage";
 export const inboundSchema = z.object({
@@ -15,12 +16,12 @@ export const inboundSchema = z.object({
   }),
 });
 export function verifyWebhook(body: string, headers: Record<string, string>) {
-  const secret = process.env.RESEND_WEBHOOK_SECRET;
+  const secret = setting("RESEND_WEBHOOK_SECRET");
   if (!secret) throw new Error("Inbound webhook is not configured");
   return inboundSchema.parse(new Webhook(secret).verify(body, headers));
 }
 async function resend(path: string, signal?: AbortSignal) {
-  const key = process.env.RESEND_API_KEY;
+  const key = setting("RESEND_API_KEY");
   if (!key) throw new Error("Resend is not configured");
   const result = await boundedRequest(
     new URL("https://api.resend.com" + path),
@@ -49,7 +50,7 @@ export async function retrieveEmail(
     signal,
   );
   const attachments: Attachment[] = [];
-  const limit = Number(process.env.MAX_ATTACHMENT_BYTES ?? 20971520);
+  const limit = Number(setting("MAX_ATTACHMENT_BYTES") || 20971520);
   let total = 0;
   for (const file of mail.attachments ?? []) {
     signal?.throwIfAborted();

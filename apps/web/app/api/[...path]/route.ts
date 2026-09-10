@@ -7,6 +7,12 @@ import {
   redact,
 } from "../../../../../packages/persistence/src/index";
 import {
+  loadSettings,
+  saveSetting,
+  setting,
+  settingKeys,
+} from "../../../../../packages/persistence/src/settings";
+import {
   toolSchema,
   ConfigurationError,
   workflowSchema,
@@ -68,6 +74,7 @@ async function handle(
       await query("SELECT 1");
       return response({ ok: true });
     }
+    await loadSettings();
     if (route === "webhooks/resend" && method === "POST") {
       const raw = await body(request);
       let event;
@@ -167,7 +174,49 @@ async function handle(
         credentials,
         runs,
         adminEmail: process.env.ADMIN_EMAIL,
+        settings: {
+          TOOL_ALLOWED_ORIGINS: setting("TOOL_ALLOWED_ORIGINS"),
+          MAX_ATTACHMENT_BYTES: setting("MAX_ATTACHMENT_BYTES"),
+          RESEND_API_KEY: Boolean(setting("RESEND_API_KEY")),
+          RESEND_WEBHOOK_SECRET: Boolean(setting("RESEND_WEBHOOK_SECRET")),
+        },
       });
+    }
+    if (route === "settings" && method === "PUT") {
+      const data = z
+        .object(
+          Object.fromEntries(
+            settingKeys.map((k) => [k, z.string().max(4096).optional()]),
+          ) as Record<(typeof settingKeys)[number], z.ZodOptional<z.ZodString>>,
+        )
+        .parse(JSON.parse(await body(request)));
+      if (data.TOOL_ALLOWED_ORIGINS !== undefined) {
+        const origins = data.TOOL_ALLOWED_ORIGINS.split(",")
+          .map((o) => o.trim())
+          .filter(Boolean);
+        for (const origin of origins) {
+          let parsed;
+          try {
+            parsed = new URL(origin);
+          } catch {
+            throw new HttpError(400, `Invalid origin: ${origin}`);
+          }
+          if (parsed.origin !== origin)
+            throw new HttpError(400, `Use an exact origin: ${parsed.origin}`);
+        }
+        data.TOOL_ALLOWED_ORIGINS = origins.join(",");
+      }
+      if (
+        data.MAX_ATTACHMENT_BYTES &&
+        !/^[1-9]\d*$/.test(data.MAX_ATTACHMENT_BYTES)
+      )
+        throw new HttpError(
+          400,
+          "Maximum attachment bytes must be a positive integer",
+        );
+      for (const key of settingKeys)
+        if (data[key] !== undefined) await saveSetting(key, data[key]);
+      return response({ ok: true });
     }
     if (route === "workflows" && method === "POST") {
       const data = z

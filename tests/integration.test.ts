@@ -43,7 +43,6 @@ suite("PostgreSQL execution and recovery", () => {
     url.pathname = "/" + database;
     process.env.DATABASE_URL = url.toString();
     process.env.CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString("hex");
-    process.env.TOOL_ALLOWED_ORIGINS = "http://localhost:4010";
     process.env.TOOL_ALLOW_PRIVATE_ORIGINS = "http://localhost:4010";
     storage = await mkdtemp(join(tmpdir(), "agent-platform-test-"));
     process.env.ATTACHMENT_DIR = storage;
@@ -53,6 +52,9 @@ suite("PostgreSQL execution and recovery", () => {
     await migrate(persistence.db, {
       migrationsFolder: "packages/persistence/migrations",
     });
+    await (
+      await import("../packages/persistence/src/settings")
+    ).saveSetting("TOOL_ALLOWED_ORIGINS", "http://localhost:4010");
     await persistence.query("INSERT INTO tools(id,definition) VALUES($1,$2)", [
       receiptTool.id,
       JSON.stringify(receiptTool),
@@ -933,6 +935,9 @@ suite("PostgreSQL execution and recovery", () => {
   });
   it("scopes agent tool discovery and dispatch, then accepts a report after ordinary tools", async () => {
     const other = { ...receiptTool, id: randomUUID(), name: "other_node_tool" };
+    await (
+      await import("../packages/persistence/src/settings")
+    ).saveSetting("TOOL_ALLOWED_ORIGINS", "http://localhost:4010");
     await persistence.query("INSERT INTO tools(id,definition) VALUES($1,$2)", [
       other.id,
       JSON.stringify(other),

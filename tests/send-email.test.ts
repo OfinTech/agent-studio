@@ -24,6 +24,7 @@ import {
   boundedRequest,
   NetworkError,
 } from "../packages/connectors/src/network";
+import { settings } from "../packages/persistence/src/settings";
 vi.mock("../packages/connectors/src/network", async (original) => ({
   ...(await original<object>()),
   boundedRequest: vi.fn(),
@@ -185,7 +186,7 @@ describe("reply rendering and Resend", () => {
     ).toThrow("message ID");
   });
   it("keeps bounded requests, the run signal and a stable idempotency header", async () => {
-    vi.stubEnv("RESEND_API_KEY", "synthetic-key");
+    settings.set("RESEND_API_KEY", "synthetic-key");
     vi.mocked(boundedRequest).mockResolvedValue({
       status: 200,
       body: Buffer.from('{"id":"provider-id"}'),
@@ -215,7 +216,7 @@ describe("reply rendering and Resend", () => {
     [500, "temporarily", true],
     [409, "temporarily", true],
   ])("reports HTTP %s safely", async (status, message, retryable) => {
-    vi.stubEnv("RESEND_API_KEY", "synthetic-key");
+    settings.set("RESEND_API_KEY", "synthetic-key");
     vi.mocked(boundedRequest).mockResolvedValue({
       status: Number(status),
       body: Buffer.from("secret upstream details"),
@@ -229,13 +230,13 @@ describe("reply rendering and Resend", () => {
     }
   });
   it("treats interrupted or malformed acceptance as uncertain and missing credentials as definitive", async () => {
-    vi.stubEnv("RESEND_API_KEY", "");
+    settings.delete("RESEND_API_KEY");
     expect(await sendEmail(render(), "key")).toMatchObject({
       ok: false,
-      error: expect.stringContaining("RESEND_API_KEY"),
+      error: expect.stringContaining("Resend API key"),
     });
     expect(boundedRequest).not.toHaveBeenCalled();
-    vi.stubEnv("RESEND_API_KEY", "synthetic");
+    settings.set("RESEND_API_KEY", "synthetic");
     vi.mocked(boundedRequest).mockRejectedValue(
       new NetworkError("secret", true, true),
     );
@@ -280,7 +281,7 @@ it("retains Resend message_id in signed event parsing and retrieved email metada
       },
     }).data.message_id,
   ).toBe("<original@example.com>");
-  vi.stubEnv("RESEND_API_KEY", "synthetic");
+  settings.set("RESEND_API_KEY", "synthetic");
   const storage = new LocalStorage();
   const attachment = {
     id: "attachment",

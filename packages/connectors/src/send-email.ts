@@ -7,6 +7,7 @@ import {
   type WorkflowNode,
 } from "../../contracts/src/index";
 import { boundedRequest, NetworkError } from "./network";
+import { setting } from "../../persistence/src/settings";
 
 export type { EmailMessage } from "../../contracts/src/index";
 export type EmailSendResult =
@@ -82,9 +83,12 @@ export async function sendEmail(
   idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<EmailSendResult> {
-  const key = process.env.RESEND_API_KEY;
+  const key = setting("RESEND_API_KEY");
   if (!key)
-    return { ok: false, error: "Email sending requires RESEND_API_KEY" };
+    return {
+      ok: false,
+      error: "Email sending requires a Resend API key in Settings",
+    };
   try {
     const response = await boundedRequest(
       new URL("https://api.resend.com/emails"),
@@ -120,13 +124,14 @@ export async function sendEmail(
     if (response.status === 401)
       return {
         ok: false,
-        error: "Email authentication failed; check RESEND_API_KEY",
+        error:
+          "Email authentication failed; check the Resend API key in Settings",
       };
     if (response.status === 403)
       return {
         ok: false,
         error:
-          "Email sending forbidden; verify the trigger inbox domain and RESEND_API_KEY sending permissions",
+          "Email sending forbidden; verify the trigger inbox domain and the Resend API key sending permissions",
       };
     if (
       response.status === 429 ||

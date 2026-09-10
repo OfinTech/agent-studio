@@ -1,3 +1,4 @@
+import { setting } from "../../persistence/src/settings";
 import { lookup } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
@@ -41,9 +42,7 @@ export function isPublicAddress(ip: string): boolean {
 }
 export function assertToolDestination(endpoint: string) {
   const url = new URL(endpoint);
-  const allowed = (process.env.TOOL_ALLOWED_ORIGINS ?? "")
-    .split(",")
-    .filter(Boolean);
+  const allowed = setting("TOOL_ALLOWED_ORIGINS").split(",").filter(Boolean);
   if (!allowed.includes(url.origin) || url.username || url.password || url.hash)
     throw new Error("API origin is not allowed by the administrator");
   const privateAllowed = (process.env.TOOL_ALLOW_PRIVATE_ORIGINS ?? "")

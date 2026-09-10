@@ -6,8 +6,10 @@ import {
   maintenance,
 } from "../../../packages/runtime/src/index";
 import { pool } from "../../../packages/persistence/src/index";
+import { loadSettings } from "../../../packages/persistence/src/settings";
 const boss = await getBoss();
 await boss.work<{ runId: string }>(QUEUE, { batchSize: 1 }, async (jobs) => {
+  await loadSettings();
   for (const job of jobs) await executeRun(job.data.runId);
 });
 let maintaining = false;
@@ -15,6 +17,7 @@ async function tick() {
   if (maintaining) return;
   maintaining = true;
   try {
+    await loadSettings();
     await dispatchOutbox();
     await maintenance();
   } catch {

@@ -36,6 +36,13 @@
       "when": 1789063842138,
       "tag": "0004_mock_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789064829327,
+      "tag": "0005_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -20,6 +20,7 @@ import {
 import { validateAttachment } from "../packages/connectors/src/storage";
 import { verifyWebhook } from "../packages/connectors/src/index";
 import { Webhook } from "svix";
+import { settings } from "../packages/persistence/src/settings";
 let server: Server;
 let origin: string;
 let hits: number;
@@ -56,7 +57,7 @@ beforeEach(async () => {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   origin = "http://127.0.0.1:" + (server.address() as any).port;
-  process.env.TOOL_ALLOWED_ORIGINS = origin;
+  settings.set("TOOL_ALLOWED_ORIGINS", origin);
   process.env.TOOL_ALLOW_PRIVATE_ORIGINS = origin;
   process.env.CREDENTIAL_ENCRYPTION_KEY = randomBytes(32).toString("hex");
 });
@@ -226,7 +227,7 @@ describe("internal MCP", () => {
 describe("inbound input", () => {
   it("verifies signatures, timestamps, and detects changed payloads", () => {
     const secret = "whsec_" + randomBytes(32).toString("base64");
-    process.env.RESEND_WEBHOOK_SECRET = secret;
+    settings.set("RESEND_WEBHOOK_SECRET", secret);
     const webhook = new Webhook(secret);
     const raw = JSON.stringify({
       type: "email.received",

@@ -1,4 +1,5 @@
 import { query, resolveCredential } from "../../persistence/src/index";
+import { setting } from "../../persistence/src/settings";
 import {
   renderPrompt,
   connectedOutcome,
@@ -184,7 +185,7 @@ export async function executeRun(
         throw new Error("No attachments match the upload configuration");
       if (
         selected.reduce((sum, a) => sum + a.size, 0) >
-        Number(process.env.MAX_ATTACHMENT_BYTES ?? 20971520)
+        Number(setting("MAX_ATTACHMENT_BYTES") || 20971520)
       )
         throw new Error("Attachment size limit exceeded");
       state.outputs[upload.id] = { count: selected.length, files: selected };

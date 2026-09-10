@@ -161,3 +161,7 @@ export const mockReceipts = pgTable("mock_receipts", {
   receipt: jsonb("receipt").notNull(),
   createdAt: created(),
 });
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
