@@ -1,0 +1,83 @@
+[
+  {
+    "file": "apps/web/app/layout.tsx",
+    "line": 8,
+    "column": 1,
+    "rule": "stylesheet-import",
+    "source": "import \"@xyflow/react/dist/style.css\";",
+    "reason": "Load official graph interaction styles or the scoped graph integration module.",
+    "insufficient": "Mantine does not implement React Flow canvas geometry, handles, or edge rendering."
+  },
+  {
+    "file": "apps/web/components/workflow-canvas.tsx",
+    "line": 24,
+    "column": 1,
+    "rule": "stylesheet-import",
+    "source": "import classes from \"./workflow-canvas.module.css\";",
+    "reason": "Load official graph interaction styles or the scoped graph integration module.",
+    "insufficient": "Mantine does not implement React Flow canvas geometry, handles, or edge rendering."
+  },
+  {
+    "file": "apps/web/components/workflow-canvas.tsx",
+    "line": 55,
+    "column": 7,
+    "rule": "styling-escape",
+    "source": "className={selected ? classes.selectedNode : classes.node}",
+    "reason": "Provide graph dimensions, selection indication, or differentiated tool handles and connections.",
+    "insufficient": "Mantine does not implement React Flow canvas geometry, handles, or edge rendering."
+  },
+  {
+    "file": "apps/web/components/workflow-canvas.tsx",
+    "line": 65,
+    "column": 11,
+    "rule": "styling-escape",
+    "source": "className={classes.toolHandle}",
+    "reason": "Provide graph dimensions, selection indication, or differentiated tool handles and connections.",
+    "insufficient": "Mantine does not implement React Flow canvas geometry, handles, or edge rendering."
+  },
+  {
+    "file": "apps/web/components/workflow-canvas.tsx",
+    "line": 100,
+    "column": 11,
+    "rule": "styling-escape",
+    "source": "className={kind === \"tool\" ? classes.toolHandle : undefined}",
+    "reason": "Provide graph dimensions, selection indication, or differentiated tool handles and connections.",
+    "insufficient": "Mantine does not implement React Flow canvas geometry, handles, or edge rendering."
+  },
+  {
+    "file": "apps/web/components/workflow-canvas.tsx",
+    "line": 159,
+    "column": 7,
+    "rule": "styling-escape",
+    "source": "className: e.kind === \"tool\" ? classes.toolEdge : classes.executionEdge",
+    "reason": "Provide graph dimensions, selection indication, or differentiated tool handles and connections.",
+    "insufficient": "Mantine does not implement React Flow canvas geometry, handles, or edge rendering."
+  },
+  {
+    "file": "apps/web/components/workflow-canvas.tsx",
+    "line": 195,
+    "column": 10,
+    "rule": "styling-escape",
+    "source": "className={classes.canvas}",
+    "reason": "Provide graph dimensions, selection indication, or differentiated tool handles and connections.",
+    "insufficient": "Mantine does not implement React Flow canvas geometry, handles, or edge rendering."
+  },
+  {
+    "file": "apps/web/components/workflow-canvas.module.css",
+    "line": 1,
+    "column": 1,
+    "rule": "stylesheet",
+    "sha256": "121707b59bc03f485a48b51c44d538150f63b3ae3541318d8f264b7a477369c2",
+    "reason": "Canvas fills its allocated editor height; node width and selection, tool handle color, and dashed tool connections. Outcome rows position their individual state connectors.",
+    "insufficient": "React Flow renders handles and SVG edges outside the Mantine Styles API; canvas geometry is required for graph interaction."
+  },
+  {
+    "file": "apps/web/components/workflow-canvas.tsx",
+    "line": 83,
+    "column": 33,
+    "rule": "styling-escape",
+    "source": "className={classes.outcomeState}",
+    "reason": "Anchor each stable state output handle to its own row as states reorder or resize.",
+    "insufficient": "React Flow positions handles absolutely; each row needs a positioning context for correct connection geometry."
+  }
+]

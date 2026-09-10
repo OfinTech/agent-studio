@@ -1,0 +1,5 @@
+{
+  "name": "@platform/worker",
+  "private": true,
+  "type": "module"
+}

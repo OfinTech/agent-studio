@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+.data/
+*.tsbuildinfo
+playwright-report/
+test-results/
+coverage/
+.DS_Store
+apps/web/next-env.d.ts

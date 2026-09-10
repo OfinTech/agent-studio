@@ -1,0 +1,55 @@
+{
+  "name": "agent-platform",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "scripts": {
+    "dev": "tsx scripts/dev.ts",
+    "worker": "tsx --env-file-if-exists=.env apps/worker/src/index.ts",
+    "db:migrate": "tsx --env-file-if-exists=.env packages/persistence/src/migrate.ts",
+    "db:seed": "tsx --env-file-if-exists=.env scripts/seed.ts",
+    "mock-api": "tsx scripts/mock-api.ts",
+    "lint": "eslint . && node scripts/ui-policy/check.mjs",
+    "typecheck": "tsc --noEmit && pnpm --filter @platform/web typecheck",
+    "test": "vitest run",
+    "test:integration": "RUN_INTEGRATION=1 vitest run tests/integration.test.ts",
+    "test:e2e": "playwright test",
+    "test:live": "tsx --env-file-if-exists=.env scripts/live-test.ts",
+    "build": "pnpm --filter @platform/web build",
+    "setup:local": "tsx scripts/setup.ts",
+    "test:smoke": "tsx scripts/receipt-smoke.ts",
+    "test:live:outcomes": "tsx --env-file-if-exists=.env scripts/live-outcomes.ts",
+    "test:live:email": "tsx --env-file-if-exists=.env scripts/live-email.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@google/genai": "^2.21.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ajv": "^8.17.1",
+    "drizzle-orm": "^0.45.1",
+    "pg": "^8.16.3",
+    "pg-boss": "^12.30.0",
+    "svix": "^1.84.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^22.19.0",
+    "@types/pg": "^8.15.6",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "drizzle-kit": "^0.31.8",
+    "eslint": "^9.39.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^3.2.4"
+  },
+  "license": "Apache-2.0"
+}

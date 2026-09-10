@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform
+      POSTGRES_DB: platform
+    ports: ["127.0.0.1:5438:5432"]
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform"]
+      interval: 3s
+      retries: 20
+  migrate:
+    build: .
+    env_file: .env
+    environment: &environment
+      DATABASE_URL: postgres://platform:platform@db:5432/platform
+      ATTACHMENT_DIR: /data/attachments
+      MOCK_API_URL: http://mock-api:4010/receipts
+    command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
+    depends_on:
+      db: { condition: service_healthy }
+  web:
+    build: .
+    env_file: .env
+    environment:
+      <<: *environment
+      PORT: 3000
+    command: ["pnpm", "--filter", "@platform/web", "start"]
+    ports: ["127.0.0.1:3000:3000"]
+    volumes: ["attachments:/data/attachments"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+  worker:
+    build: .
+    env_file: .env
+    environment: *environment
+    command: ["pnpm", "worker"]
+    volumes: ["attachments:/data/attachments"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      mock-api: { condition: service_started }
+  mock-api:
+    build: .
+    command: ["pnpm", "mock-api"]
+    environment:
+      MOCK_STATE_DIR: /data/mock
+    volumes: ["mock:/data/mock"]
+volumes:
+  postgres:
+  attachments:
+  mock:

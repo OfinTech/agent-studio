@@ -1,0 +1,30 @@
+.canvas {
+  height: 100%;
+  width: 100%;
+}
+
+.node {
+  width: 260px;
+}
+
+.selectedNode {
+  width: 260px;
+  outline: 2px solid var(--mantine-color-blue-6);
+}
+
+.toolHandle {
+  background: var(--mantine-color-violet-6);
+}
+
+.toolEdge :global(.react-flow__edge-path) {
+  stroke: var(--mantine-color-violet-6);
+  stroke-dasharray: 5 5;
+}
+
+.executionEdge :global(.react-flow__edge-path) {
+  stroke: var(--mantine-color-gray-6);
+}
+
+.outcomeState {
+  position: relative;
+}

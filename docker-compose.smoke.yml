@@ -1,0 +1,10 @@
+services:
+  db:
+    ports: !override ["127.0.0.1:5439:5432"]
+  web:
+    ports: !override ["127.0.0.1:3001:3000"]
+    environment:
+      APP_URL: http://localhost:3001
+  worker:
+    environment:
+      APP_URL: http://localhost:3001

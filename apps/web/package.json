@@ -1,0 +1,26 @@
+{
+  "name": "@platform/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0",
+    "typecheck": "next typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "@mantine/core": "9.6.1",
+    "@mantine/form": "9.6.1",
+    "@mantine/hooks": "9.6.1",
+    "@xyflow/react": "^12.10.0",
+    "lucide-react": "^0.577.0",
+    "next": "16.3.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "postcss": "^8.5.28",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "type": "email.received",
+  "data": {
+    "email_id": "synthetic-receipt-event",
+    "from": "receipts@paperandpine.example",
+    "to": ["receipts@example.com"],
+    "subject": "Your Paper & Pine receipt"
+  }
+}
