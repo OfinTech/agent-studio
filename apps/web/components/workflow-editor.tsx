@@ -4,9 +4,10 @@ import { useState } from "react";
 import { connectedOutcome } from "../../../packages/contracts/src/index";
 import {
   Anchor,
+  Badge,
+  Box,
   Button,
   Drawer,
-  Box,
   Flex,
   Group,
   Menu,
@@ -57,7 +58,12 @@ export function WorkflowEditor({
   return (
     <Stack gap="md" flex={1} mih={0}>
       <Group justify="space-between" flex="0 0 auto">
-        <Title order={1}>{draft.name}</Title>
+        <Group gap="md">
+          <Title order={1}>{draft.name}</Title>
+          <Badge color={record.published_version ? "green" : "gray"}>
+            {record.published_version ? "Published" : "Draft"}
+          </Badge>
+        </Group>
         <Group gap="md">
           <Menu>
             <Menu.Target>
@@ -151,16 +157,13 @@ export function WorkflowEditor({
             onClick={() =>
               void action(async () => {
                 await save();
-                const version = await api(
-                  `workflows/${workflowId}/publish`,
-                  "POST",
-                );
+                await api(`workflows/${workflowId}/publish`, "POST");
                 await refresh();
-                setNotice(`Published v${version.number}`);
+                setNotice("Published");
               }, "publish")
             }
           >
-            Publish
+            {record.published_version ? "Republish" : "Publish"}
           </Button>
         </Group>
       </Group>

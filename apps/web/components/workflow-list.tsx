@@ -2,6 +2,7 @@
 import Link from "next/link";
 import {
   Anchor,
+  Badge,
   Button,
   Group,
   ScrollArea,
@@ -36,6 +37,7 @@ export function WorkflowList({
               <Table.Tr>
                 <Table.Th>Name</Table.Th>
                 <Table.Th>Receiving address</Table.Th>
+                <Table.Th>Status</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -56,6 +58,13 @@ export function WorkflowList({
                       {workflow.draft.nodes.find(
                         (node) => node.type === "email",
                       )?.data.recipient || "—"}
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge
+                        color={workflow.published_version ? "green" : "gray"}
+                      >
+                        {workflow.published_version ? "Published" : "Draft"}
+                      </Badge>
                     </Table.Td>
                   </Table.Tr>
                 );

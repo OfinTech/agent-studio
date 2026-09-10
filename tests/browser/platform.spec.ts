@@ -103,7 +103,7 @@ test("administrator builds, publishes and executes the receipt workflow", async 
   await connect(page, "tool", "agent", true);
   await expect(page.locator(".react-flow__edge")).toHaveCount(3);
   await page.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Published v1");
+  await expect(page.getByRole("status")).toContainText("Published");
   await page.getByRole("button", { name: "Test run", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Execution details" }),
@@ -908,7 +908,7 @@ test("Outcome editing, stable branches, generated settings and tool actions surv
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Saved");
   await page.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Published v1");
+  await expect(page.getByRole("status")).toContainText("Published");
   await page.reload();
   await expect(outcome).toContainText("Completed");
   await expect(outcome.locator('[data-handleid="success"]')).toBeVisible();
@@ -1293,7 +1293,7 @@ test("terminal email settings, references, preview and mobile scrolling survive 
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("Saved");
   await page.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("Published v1");
+  await expect(page.getByRole("status")).toHaveText("Published");
   await page.reload();
   await expect(reply).toBeVisible();
   await page.getByRole("button", { name: "Test run", exact: true }).click();

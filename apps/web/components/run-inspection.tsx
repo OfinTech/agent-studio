@@ -54,7 +54,6 @@ export function RunHistory({
               <Table.Tr>
                 <Table.Th>Workflow</Table.Th>
                 <Table.Th>Status</Table.Th>
-                <Table.Th>Version</Table.Th>
                 <Table.Th>Started</Table.Th>
               </Table.Tr>
             </Table.Thead>
@@ -78,7 +77,6 @@ export function RunHistory({
                       {statusLabel(run.status)}
                     </Badge>
                   </Table.Td>
-                  <Table.Td>v{run.number}</Table.Td>
                   <Table.Td>
                     {new Date(run.created_at).toLocaleString()}
                   </Table.Td>
@@ -140,7 +138,6 @@ export function RunInspector({
               <Badge data-testid="run-status" color={statusColor(run.status)}>
                 {statusLabel(run.status)}
               </Badge>
-              <Text>Version {run.number}</Text>
             </Group>
             <Code>{run.id}</Code>
             {run.error && (
