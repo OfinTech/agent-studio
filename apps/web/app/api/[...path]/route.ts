@@ -90,6 +90,24 @@ async function handle(
         throw new HttpError(503, "Email could not be queued; retry delivery");
       }
     }
+    if (route === "mock/receipts" && method === "POST") {
+      const key = request.headers.get("idempotency-key") ?? randomUUID();
+      let receipt: unknown;
+      try {
+        receipt = JSON.parse(await body(request));
+      } catch {
+        throw new HttpError(400, "Invalid JSON");
+      }
+      await query(
+        "INSERT INTO mock_receipts(key,id,receipt) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+        [key, randomUUID(), JSON.stringify(receipt)],
+      );
+      const [stored] = await query(
+        "SELECT id,receipt FROM mock_receipts WHERE key=$1",
+        [key],
+      );
+      return response({ ...stored, accepted: true }, 201);
+    }
     if (method !== "GET") {
       const origin = request.headers.get("origin");
       if (
@@ -124,6 +142,12 @@ async function handle(
       result.cookies.set(SESSION_COOKIE, "", { ...cookieOptions(), maxAge: 0 });
       return result;
     }
+    if (route === "mock/receipts" && method === "GET")
+      return response(
+        await query(
+          "SELECT key,id,receipt,created_at FROM mock_receipts ORDER BY created_at DESC LIMIT 100",
+        ),
+      );
     if (route === "bootstrap" && method === "GET") {
       const [workflows, tools, credentials, runs] = await Promise.all([
         query(

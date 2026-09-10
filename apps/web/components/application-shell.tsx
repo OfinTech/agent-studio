@@ -12,7 +12,14 @@ import {
   Text,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { Activity, KeyRound, LayoutGrid, LogOut, Wrench } from "lucide-react";
+import {
+  Activity,
+  Inbox,
+  KeyRound,
+  LayoutGrid,
+  LogOut,
+  Wrench,
+} from "lucide-react";
 import Link from "next/link";
 import type { PlatformController } from "./use-platform";
 const navigation = [
@@ -20,6 +27,7 @@ const navigation = [
   { id: "runs", label: "Run history", icon: Activity },
   { id: "tools", label: "MCP tools", icon: Wrench },
   { id: "credentials", label: "Credentials", icon: KeyRound },
+  { id: "mock-receipts", label: "Mock receipts", icon: Inbox },
 ] as const;
 export function ApplicationShell({
   controller: c,

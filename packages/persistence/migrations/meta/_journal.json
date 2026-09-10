@@ -29,6 +29,13 @@
       "when": 1789050000001,
       "tag": "0003_email_sends",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789063842138,
+      "tag": "0004_mock_receipts",
+      "breakpoints": true
     }
   ]
 }

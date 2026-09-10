@@ -155,3 +155,9 @@ export const emailSends = pgTable(
   },
   (t) => [uniqueIndex("email_sends_run_node").on(t.runId, t.nodeId)],
 );
+export const mockReceipts = pgTable("mock_receipts", {
+  key: text("key").primaryKey(),
+  id: text("id").notNull(),
+  receipt: jsonb("receipt").notNull(),
+  createdAt: created(),
+});

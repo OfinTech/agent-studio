@@ -11,6 +11,7 @@ import {
 } from "@mantine/core";
 import { ApplicationShell } from "./application-shell";
 import { Credentials, CredentialDialog } from "./credentials";
+import { MockReceipts } from "./mock-receipts";
 import { RunHistory, RunInspector } from "./run-inspection";
 import { Tools, ToolDialog } from "./tools";
 import { usePlatform } from "./use-platform";
@@ -52,6 +53,8 @@ export function Platform({ children }: { children: React.ReactNode }) {
           <Tools controller={c} />
         ) : c.view === "credentials" ? (
           <Credentials controller={c} />
+        ) : c.view === "mock-receipts" ? (
+          <MockReceipts controller={c} />
         ) : (
           <RunHistory controller={c} />
         )}
