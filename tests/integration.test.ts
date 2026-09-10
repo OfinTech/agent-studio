@@ -62,7 +62,19 @@ suite("PostgreSQL execution and recovery", () => {
     if (runtime) await (await runtime.getBoss()).stop({ graceful: true });
     if (persistence) await persistence.pool.end();
     if (admin) {
-      await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+      // Pool.end can resolve before PostgreSQL processes every socket close.
+      // Wait for disconnection instead of terminating those clients mid-close.
+      await vi.waitFor(
+        async () => {
+          const result = await admin.query(
+            "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=$1",
+            [database],
+          );
+          expect(result.rows[0].count).toBe(0);
+        },
+        { timeout: 5000 },
+      );
+      await admin.query(`DROP DATABASE IF EXISTS "${database}"`);
       await admin.end();
     }
     if (storage) await rm(storage, { recursive: true, force: true });
