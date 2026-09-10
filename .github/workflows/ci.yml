@@ -53,3 +53,19 @@ jobs:
           name: browser-results
           path: test-results/
           retention-days: 7
+  deploy:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency: deploy
+    env:
+      SERVER: ubuntu@84.8.97.88
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H 84.8.97.88 >> ~/.ssh/known_hosts
+      - run: rsync -az --delete --exclude-from=.dockerignore --exclude=.env ./ "$SERVER:agent-platform/"
+      - run: ssh "$SERVER" 'cd agent-platform && docker compose -f docker-compose.prod.yml up --build -d --remove-orphans'

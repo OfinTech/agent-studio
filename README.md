@@ -170,6 +170,8 @@ Use HTTPS, a trusted reverse proxy, and restricted origin allowlists. The applic
 
 Docker Compose is a single-host reference deployment. Review backup/restore, TLS, database access, and capacity for your environment. The example database password and private mock exceptions are development settings.
 
+`docker-compose.prod.yml` runs the same stack without the mock API behind Caddy, which obtains TLS certificates for `agent.ofintech.net`. The server keeps its own `.env` in `~/agent-platform`. The CI `deploy` job syncs every verified push to `main` there over SSH using the `DEPLOY_SSH_KEY` repository secret and rebuilds the containers.
+
 ## Scope and license
 
 One administrator, one workspace, bring-your-own Gemini, Claude, or OpenAI credentials. Cycles, parallel branches, branch joins, multi-tenant SaaS, billing, model hosting, inbox OAuth, OpenAPI import, and external MCP hosting are outside this release.

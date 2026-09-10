@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform
+      POSTGRES_DB: platform
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform"]
+      interval: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build: .
+    env_file: .env
+    environment: &environment
+      DATABASE_URL: postgres://platform:platform@db:5432/platform
+      ATTACHMENT_DIR: /data/attachments
+    command: ["pnpm", "db:migrate"]
+    depends_on:
+      db: { condition: service_healthy }
+  web:
+    build: .
+    env_file: .env
+    environment:
+      <<: *environment
+      PORT: 3000
+    command: ["pnpm", "--filter", "@platform/web", "start"]
+    volumes: ["attachments:/data/attachments"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+  worker:
+    build: .
+    env_file: .env
+    environment: *environment
+    command: ["pnpm", "worker"]
+    volumes: ["attachments:/data/attachments"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+  caddy:
+    image: caddy:2-alpine
+    command:
+      [
+        "caddy",
+        "reverse-proxy",
+        "--from",
+        "agent.ofintech.net",
+        "--to",
+        "web:3000",
+      ]
+    ports: ["80:80", "443:443"]
+    volumes: ["caddy:/data"]
+    depends_on: [web]
+    restart: unless-stopped
+volumes:
+  postgres:
+  attachments:
+  caddy:
