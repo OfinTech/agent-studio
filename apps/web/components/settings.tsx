@@ -1,5 +1,6 @@
 "use client";
 import {
+  Badge,
   Button,
   Group,
   PasswordInput,
@@ -24,10 +25,27 @@ export function SettingsView({
       RESEND_WEBHOOK_SECRET: "",
     },
   });
-  const secretStatus = (configured: boolean) =>
-    configured
-      ? "Configured. Enter a new value to replace it."
-      : "Not configured.";
+  const secretLabel = (label: string, configured: boolean) => (
+    <Group gap="xs" component="span">
+      {label}
+      <Badge color={configured ? "green" : "gray"} variant="light">
+        {configured ? "Configured" : "Not configured"}
+      </Badge>
+    </Group>
+  );
+  const secretProps = (
+    key: "RESEND_API_KEY" | "RESEND_WEBHOOK_SECRET",
+    label: string,
+  ) => ({
+    label: secretLabel(label, current[key]),
+    description: current[key]
+      ? "Stored. Enter a new value to replace it."
+      : undefined,
+    placeholder: current[key] ? "••••••••••••" : undefined,
+    autoComplete: "new-password",
+    flex: 1,
+    ...form.getInputProps(key),
+  });
   const clear = (key: "RESEND_API_KEY" | "RESEND_WEBHOOK_SECRET") =>
     void c.action(async () => {
       await api("settings", "PUT", { [key]: "" });
@@ -72,13 +90,7 @@ export function SettingsView({
           {...form.getInputProps("MAX_ATTACHMENT_BYTES")}
         />
         <Group align="flex-end" wrap="nowrap">
-          <PasswordInput
-            label="Resend API key"
-            description={secretStatus(current.RESEND_API_KEY)}
-            autoComplete="new-password"
-            flex={1}
-            {...form.getInputProps("RESEND_API_KEY")}
-          />
+          <PasswordInput {...secretProps("RESEND_API_KEY", "Resend API key")} />
           <Button
             variant="default"
             disabled={!current.RESEND_API_KEY || c.busy}
@@ -89,11 +101,7 @@ export function SettingsView({
         </Group>
         <Group align="flex-end" wrap="nowrap">
           <PasswordInput
-            label="Resend webhook secret"
-            description={secretStatus(current.RESEND_WEBHOOK_SECRET)}
-            autoComplete="new-password"
-            flex={1}
-            {...form.getInputProps("RESEND_WEBHOOK_SECRET")}
+            {...secretProps("RESEND_WEBHOOK_SECRET", "Resend webhook secret")}
           />
           <Button
             variant="default"
