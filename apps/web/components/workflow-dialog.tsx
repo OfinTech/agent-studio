@@ -2,9 +2,11 @@
 import {
   Alert,
   Button,
+  Group,
   Modal,
   NativeSelect,
   Stack,
+  Text,
   TextInput,
 } from "@mantine/core";
 import { useEffect } from "react";
@@ -105,9 +107,62 @@ export function WorkflowSettings({
             data-autofocus
             {...form.getInputProps("name")}
           />
-          <Button type="submit">Apply</Button>
+          <Group justify="space-between">
+            <Button type="submit">Apply</Button>
+            <Button
+              variant="default"
+              color="red"
+              onClick={() => c.setModal("delete-workflow")}
+            >
+              Delete workflow
+            </Button>
+          </Group>
         </Stack>
       </form>
+    </Modal>
+  );
+}
+export function DeleteWorkflow({
+  controller: c,
+}: {
+  controller: PlatformController;
+}) {
+  return (
+    <Modal
+      opened={c.modal === "delete-workflow"}
+      onClose={() => !c.busy && c.setModal(null)}
+      title="Delete workflow"
+      closeButtonProps={{ "aria-label": "Close dialog", disabled: c.busy }}
+    >
+      <Stack gap="md">
+        {c.error && (
+          <Alert color="red" role="alert">
+            {c.error}
+          </Alert>
+        )}
+        <Text>
+          This removes {c.draft?.name ?? "the workflow"}, its published version,
+          and its run history.
+        </Text>
+        <Group>
+          <Button
+            color="red"
+            loading={c.busyAction === "delete"}
+            disabled={c.busy}
+            onClick={() => void c.action(c.deleteWorkflow, "delete")}
+          >
+            Delete
+          </Button>
+          <Button
+            variant="default"
+            data-autofocus
+            disabled={c.busy}
+            onClick={() => c.setModal(null)}
+          >
+            Cancel
+          </Button>
+        </Group>
+      </Stack>
     </Modal>
   );
 }

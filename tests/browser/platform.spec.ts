@@ -1385,3 +1385,22 @@ test("publication returns actionable validation errors for invalid execution gra
     "Add at least one agent node.",
   );
 });
+
+test("deletes a workflow after confirmation", async ({ page }) => {
+  await signIn(page);
+  const { name } = await createReceipt(page, "Delete");
+  await page
+    .getByRole("button", { name: "Workflow settings", exact: true })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Workflow settings" })
+    .getByRole("button", { name: "Delete workflow", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Delete workflow" });
+  await expect(
+    dialog.getByRole("button", { name: "Cancel", exact: true }),
+  ).toBeFocused();
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page).toHaveURL(/\/workflows$/);
+  await expect(page.getByRole("link", { name, exact: true })).toHaveCount(0);
+});

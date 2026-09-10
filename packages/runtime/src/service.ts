@@ -184,3 +184,34 @@ export async function saveDraft(id: string, draft: Workflow) {
     [id, JSON.stringify(parsed)],
   );
 }
+export async function deleteWorkflow(id: string) {
+  await transaction(async (client) => {
+    const { rows: runs } = await client.query(
+      "SELECT r.id,r.status FROM runs r JOIN versions v ON v.id=r.version_id WHERE v.workflow_id=$1",
+      [id],
+    );
+    if (runs.some((r) => ["queued", "running"].includes(r.status)))
+      throw new ConfigurationError(
+        "Wait for the workflow's active runs to finish before deleting it",
+      );
+    const ids = runs.map((r) => r.id);
+    for (const table of [
+      "email_sends",
+      "provider_files",
+      "outbox",
+      "checkpoints",
+      "tool_calls",
+      "steps",
+    ])
+      await client.query(`DELETE FROM ${table} WHERE run_id=ANY($1::text[])`, [
+        ids,
+      ]);
+    await client.query("DELETE FROM runs WHERE id=ANY($1::text[])", [ids]);
+    await client.query("DELETE FROM versions WHERE workflow_id=$1", [id]);
+    const { rowCount } = await client.query(
+      "DELETE FROM workflows WHERE id=$1",
+      [id],
+    );
+    if (!rowCount) throw new ConfigurationError("Workflow not found");
+  });
+}

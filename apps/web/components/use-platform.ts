@@ -100,7 +100,12 @@ export function usePlatform() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [modal, setModal] = useState<
-    "workflow" | "workflow-settings" | "credential" | "tool" | null
+    | "workflow"
+    | "workflow-settings"
+    | "delete-workflow"
+    | "credential"
+    | "tool"
+    | null
   >(null);
   const [editingTool, setEditingTool] = useState<ToolDefinition>();
   const runTrigger = useRef<HTMLElement | null>(null);
@@ -241,8 +246,21 @@ export function usePlatform() {
     update(attachOutcome(draft, agentId, id));
     setSelected(id);
   }
+  async function deleteWorkflow() {
+    const id = workflowId;
+    await api("workflows/" + id, "DELETE");
+    setDrafts((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+    await refresh();
+    setModal(null);
+    router.push("/workflows");
+  }
   return {
     addOutcome,
+    deleteWorkflow,
     navigate,
     onNavigate,
     pendingNavigation,

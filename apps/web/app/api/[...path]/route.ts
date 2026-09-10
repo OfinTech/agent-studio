@@ -23,6 +23,7 @@ import {
   saveDraft,
   testRun,
   ingest,
+  deleteWorkflow,
 } from "../../../../../packages/runtime/src/index";
 import { verifyWebhook } from "../../../../../packages/connectors/src/index";
 import { validateTool } from "../../../../../packages/mcp/src/index";
@@ -233,6 +234,10 @@ async function handle(
       await saveDraft(id, workflow);
       return response({ id, draft: workflow }, 201);
     }
+    if (path[0] === "workflows" && path.length === 2 && method === "DELETE") {
+      await deleteWorkflow(path[1]);
+      return response({ ok: true });
+    }
     if (path[0] === "workflows" && path.length === 2 && method === "PUT") {
       await saveDraft(
         path[1],
@@ -345,4 +350,4 @@ async function handle(
     );
   }
 }
-export { handle as GET, handle as POST, handle as PUT };
+export { handle as GET, handle as POST, handle as PUT, handle as DELETE };

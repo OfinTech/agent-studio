@@ -43,6 +43,13 @@
       "when": 1789064829327,
       "tag": "0005_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789068039220,
+      "tag": "0006_versions_deletable",
+      "breakpoints": true
     }
   ]
 }

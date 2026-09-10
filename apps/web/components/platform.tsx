@@ -16,7 +16,7 @@ import { SettingsView } from "./settings";
 import { RunHistory, RunInspector } from "./run-inspection";
 import { Tools, ToolDialog } from "./tools";
 import { usePlatform } from "./use-platform";
-import { WorkflowDialog } from "./workflow-dialog";
+import { WorkflowDialog, DeleteWorkflow } from "./workflow-dialog";
 import { WorkflowList } from "./workflow-list";
 import { WorkflowSettings } from "./workflow-dialog";
 import { WorkflowEditor } from "./workflow-editor";
@@ -107,6 +107,7 @@ export function Platform({ children }: { children: React.ReactNode }) {
       </Modal>
       <WorkflowSettings controller={c} />
       <WorkflowDialog controller={c} />
+      <DeleteWorkflow controller={c} />
       <CredentialDialog controller={c} />
       <ToolDialog controller={c} />
       <RunInspector controller={c} />

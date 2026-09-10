@@ -48,6 +48,7 @@ import {
 } from "./run-lifecycle";
 import { executeEmailStep } from "./email-execution";
 export { decodeCheckpoint, type Checkpoint } from "./checkpoint";
+export { deleteWorkflow } from "./service";
 const json = (value: unknown) => JSON.stringify(value);
 type RunRecord = {
   status: string;
