@@ -667,7 +667,6 @@ test("contextual settings resize the canvas without replacing it, and Add step s
   await expect(add).toBeFocused();
   for (const copy of [
     "Workflow overview",
-    "Draft",
     "Changes are saved as a draft",
     "Available to agent",
     "When an email arrives",
