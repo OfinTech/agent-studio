@@ -1,4 +1,6 @@
-# Agent Platform
+# Agent Studio
+
+Source: [OfinTech/agent-studio](https://github.com/OfinTech/agent-studio).
 
 A self-hostable visual builder for email-triggered agents. Connect Gemini, Claude, or OpenAI credentials, define tools from your APIs, and configure task outcomes and follow-up actions.
 
