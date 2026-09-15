@@ -82,6 +82,7 @@ export function WorkflowEditor({
                   "upload",
                   "agent",
                   "tool",
+                  "pdf_template",
                   "action",
                   "send_email",
                   "outcome",
@@ -99,13 +100,15 @@ export function WorkflowEditor({
                       } else c.addNode(type);
                     }}
                   >
-                    {type === "tool"
-                      ? "MCP tool"
-                      : type === "action"
-                        ? "Tool action"
-                        : type === "send_email"
-                          ? "Send email"
-                          : type[0].toUpperCase() + type.slice(1)}
+                    {type === "pdf_template"
+                      ? "PDF template"
+                      : type === "tool"
+                        ? "MCP tool"
+                        : type === "action"
+                          ? "Tool action"
+                          : type === "send_email"
+                            ? "Send email"
+                            : type[0].toUpperCase() + type.slice(1)}
                   </Menu.Item>
                 );
               })}

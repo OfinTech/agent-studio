@@ -27,6 +27,7 @@ export type Run = {
     id: string;
     node_id: string;
     attempt_order: number;
+    template_node_id: string | null;
     status: string;
     result: unknown;
     report_id: string | null;

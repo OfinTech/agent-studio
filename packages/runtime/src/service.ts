@@ -1,3 +1,6 @@
+import { TEMPLATE_PROFILE } from "../../contracts/src/pdf-templates";
+import { validateTemplateResources } from "./template-resources";
+import { TemplateResourceStorage } from "../../connectors/src/template-resources";
 import { REPORT_PROFILE } from "../../contracts/src/reports";
 import { ReportStorage } from "../../connectors/src/reports";
 import { randomUUID } from "node:crypto";
@@ -61,6 +64,10 @@ export async function publish(id: string) {
     for (const node of workflow.nodes)
       if (node.type === "agent" && node.data.generatePdf)
         node.data.rendererProfile = REPORT_PROFILE;
+    for (const node of workflow.nodes)
+      if (node.type === "pdf_template")
+        node.data.rendererProfile = TEMPLATE_PROFILE;
+    await validateTemplateResources(id, workflow, client);
     const ids = workflow.nodes
       .filter((n) => n.type === "tool" || n.type === "action")
       .map((n) => n.data.toolId);
@@ -184,13 +191,22 @@ export async function testRun(workflowId: string) {
 }
 export async function saveDraft(id: string, draft: Workflow) {
   const parsed = workflowSchema.parse(draft);
-  await query(
-    "INSERT INTO workflows(id,draft) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET draft=excluded.draft",
-    [id, JSON.stringify(parsed)],
-  );
+  await transaction(async (client) => {
+    await client.query(
+      "INSERT INTO workflows(id,draft) VALUES($1,$2) ON CONFLICT(id) DO NOTHING",
+      [id, JSON.stringify(parsed)],
+    );
+    await client.query("SELECT id FROM workflows WHERE id=$1 FOR UPDATE", [id]);
+    await validateTemplateResources(id, parsed, client);
+    await client.query("UPDATE workflows SET draft=$2 WHERE id=$1", [
+      id,
+      JSON.stringify(parsed),
+    ]);
+  });
 }
 export async function deleteWorkflow(id: string) {
   const files = await transaction(async (client) => {
+    await client.query("SELECT id FROM workflows WHERE id=$1 FOR UPDATE", [id]);
     const { rows: runs } = await client.query(
       "SELECT r.id,r.status FROM runs r JOIN versions v ON v.id=r.version_id WHERE v.workflow_id=$1",
       [id],
@@ -225,15 +241,23 @@ export async function deleteWorkflow(id: string) {
       ]);
     await client.query("DELETE FROM runs WHERE id=ANY($1::text[])", [ids]);
     await client.query("DELETE FROM versions WHERE workflow_id=$1", [id]);
+    const { rows: images } = await client.query(
+      "DELETE FROM template_resources WHERE workflow_id=$1 RETURNING id",
+      [id],
+    );
     const { rowCount } = await client.query(
       "DELETE FROM workflows WHERE id=$1",
       [id],
     );
     if (!rowCount) throw new ConfigurationError("Workflow not found");
-    return files;
+    return { reports: files, images };
   });
   // A failed unlink is retried by orphan maintenance; never delete bytes before commit.
-  for (const file of files)
+  for (const image of files.images)
+    await new TemplateResourceStorage()
+      .delete(image.id)
+      .catch(() => console.error("Template image cleanup deferred"));
+  for (const file of files.reports)
     await new ReportStorage()
       .delete(file.id)
       .catch(() => console.error("Report cleanup deferred"));

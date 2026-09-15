@@ -1,7 +1,16 @@
 "use client";
 import { useState, useEffect } from "react";
 import { Box, Group, Paper, Stack, Text, ThemeIcon } from "@mantine/core";
-import { Mail, FileUp, Bot, Wrench, GitBranch, Play, Send } from "lucide-react";
+import {
+  Mail,
+  FileUp,
+  Bot,
+  Wrench,
+  GitBranch,
+  Play,
+  Send,
+  FileText,
+} from "lucide-react";
 import {
   ReactFlow,
   useUpdateNodeInternals,
@@ -27,6 +36,7 @@ export const nodeIcons = {
   upload: FileUp,
   agent: Bot,
   tool: Wrench,
+  pdf_template: FileText,
   outcome: GitBranch,
   action: Play,
   send_email: Send,
@@ -36,6 +46,7 @@ export const typeLabels = {
   upload: "Attachment upload",
   agent: "AI agent",
   tool: "MCP tool",
+  pdf_template: "PDF template",
   outcome: "Outcome",
   action: "Tool action",
   send_email: "Send email",
@@ -43,6 +54,7 @@ export const typeLabels = {
 function FlowNode({ id, data, selected }: NodeProps) {
   const kind = data.kind as WorkflowNode["type"];
   const Icon = nodeIcons[kind];
+  const isTool = kind === "tool" || kind === "pdf_template";
   const updateNodeInternals = useUpdateNodeInternals();
   const states = data.states as WorkflowNode["data"]["states"];
   useEffect(() => {
@@ -54,7 +66,7 @@ function FlowNode({ id, data, selected }: NodeProps) {
       p="md"
       className={selected ? classes.selectedNode : classes.node}
     >
-      {kind !== "email" && kind !== "tool" && (
+      {kind !== "email" && !isTool && (
         <Handle type="target" position={Position.Left} id="in" />
       )}
       {kind === "agent" && (
@@ -95,9 +107,9 @@ function FlowNode({ id, data, selected }: NodeProps) {
       {kind !== "outcome" && kind !== "send_email" && (
         <Handle
           type="source"
-          position={kind === "tool" ? Position.Top : Position.Right}
-          id={kind === "tool" ? "tool" : "out"}
-          className={kind === "tool" ? classes.toolHandle : undefined}
+          position={isTool ? Position.Top : Position.Right}
+          id={isTool ? "tool" : "out"}
+          className={isTool ? classes.toolHandle : undefined}
         />
       )}
     </Paper>
@@ -144,10 +156,12 @@ export function WorkflowCanvas({
                   : n.data.model
                 : n.type === "send_email"
                   ? "Reply to original sender"
-                  : n.type === "outcome"
-                    ? undefined
-                    : (data?.tools.find((t) => t.id === n.data.toolId)?.name ??
-                      "Choose a tool"),
+                  : n.type === "pdf_template"
+                    ? n.data.pdfTemplate?.toolName
+                    : n.type === "outcome"
+                      ? undefined
+                      : (data?.tools.find((t) => t.id === n.data.toolId)
+                          ?.name ?? "Choose a tool"),
       },
     })) ?? [];
   const flowEdges: Edge[] =
@@ -162,7 +176,10 @@ export function WorkflowCanvas({
   function connect(connection: Connection) {
     if (!draft) return;
     const source = draft.nodes.find((n) => n.id === connection.source);
-    const kind = source?.type === "tool" ? "tool" : "execution";
+    const kind =
+      source?.type === "tool" || source?.type === "pdf_template"
+        ? "tool"
+        : "execution";
     if (
       draft.edges.some(
         (e) =>

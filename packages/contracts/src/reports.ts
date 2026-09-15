@@ -1,3 +1,4 @@
+import { attachedTemplates } from "./pdf-templates";
 import { z } from "zod";
 import type { Workflow } from "./index";
 export const REPORT_PROFILE = "tectonic-0.15.0-bundle33-report-v1";
@@ -46,6 +47,9 @@ export function reportSources(workflow: Workflow, nodeId: string) {
   }
   ids.delete(nodeId);
   return workflow.nodes.filter(
-    (n) => ids.has(n.id) && n.type === "agent" && n.data.generatePdf,
+    (n) =>
+      ids.has(n.id) &&
+      n.type === "agent" &&
+      (n.data.generatePdf || attachedTemplates(workflow, n.id).length > 0),
   );
 }

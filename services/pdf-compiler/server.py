@@ -1,5 +1,9 @@
 """Credential-free, single-job offline LaTeX renderer. Run only with Compose isolation."""
 import base64
+import hashlib
+import io
+import re
+from PIL import Image
 import json
 import os
 from pathlib import Path
@@ -14,25 +18,66 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROFILE = "tectonic-0.15.0-bundle33-report-v1"
+TEMPLATE_PROFILE = "tectonic-0.15.0-bundle33-template-v2"
+Image.MAX_IMAGE_PIXELS = 16000000
 MAX_PDF = 10 * 1024 * 1024
 JOBS = Path("/tmp/jobs")
 LOCK = threading.Lock()
 
 
-def compile_report(source, connection=None):
+def validate_resources(resources, profile):
+    if not isinstance(resources, list) or len(resources) > 10 or (profile == PROFILE and resources):
+        raise ValueError("Invalid image resources or renderer profile")
+    decoded, names, total = [], set(), 0
+    for item in resources:
+        name = item.get("filename", "")
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}\.(png|jpg)", name) or name in names:
+            raise ValueError("Invalid or duplicate image filename")
+        names.add(name)
+        content = item.get("content", "")
+        if not isinstance(content, str) or len(content) > 6990508:
+            raise ValueError("Image exceeds 5 MiB")
+        raw = base64.b64decode(content, validate=True)
+        total += len(raw)
+        if not 0 < len(raw) <= 5242880 or total > 20971520 or item.get("size") != len(raw):
+            raise ValueError("Image resources exceed size limits")
+        if hashlib.sha256(raw).hexdigest() != item.get("checksum"):
+            raise ValueError("Image checksum does not match")
+        expected = "PNG" if name.endswith(".png") else "JPEG"
+        if item.get("mimeType") != ("image/png" if expected == "PNG" else "image/jpeg"):
+            raise ValueError("Invalid image media type")
+        with Image.open(io.BytesIO(raw), formats=["PNG", "JPEG"]) as image:
+            if image.format != expected or getattr(image, "n_frames", 1) != 1 or image.width * image.height > 16000000:
+                raise ValueError("Invalid image content or dimensions")
+            image.verify()
+        with Image.open(io.BytesIO(raw), formats=["PNG", "JPEG"]) as image:
+            image.load()
+        decoded.append((name, raw))
+    return decoded
+
+
+def compile_report(source, connection=None, profile=PROFILE, resources=None):
     if not isinstance(source, str) or not source.strip() or len(source.encode()) > 131072:
         return {"ok": False, "error": "Provide nonempty LaTeX source, at most 128 KiB."}
+    try:
+        images = validate_resources(resources or [], profile)
+    except (ValueError, OSError, TypeError, AttributeError, Image.DecompressionBombError):
+        return {"ok": False, "error": "Invalid image resources: check filenames, checksums, image content and limits."}
     deadline = time.monotonic() + 30
     with tempfile.TemporaryDirectory(dir=JOBS) as directory:
         work = Path(directory)
         (work / "report.tex").write_text(source)
+        if images:
+            (work / "assets").mkdir(mode=0o700)
+            for name, raw in images:
+                (work / "assets" / name).write_bytes(raw)
 
         def command(args, logname):
             with (work / logname).open("wb") as log:
                 process = subprocess.Popen(["python3", "-B", "/opt/runner.py", *args], cwd=work, stdout=log, stderr=subprocess.STDOUT,
                                            start_new_session=True,
                                            env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": directory,
-                                                "XDG_CACHE_HOME": "/opt/tex-cache", "TECTONIC_UNTRUSTED_MODE": "1",
+                                                "XDG_CACHE_HOME": "/opt/tex-cache-template" if profile == TEMPLATE_PROFILE else "/opt/tex-cache", "TECTONIC_UNTRUSTED_MODE": "1",
                                                 "SOURCE_DATE_EPOCH": "1788825600"})
                 try:
                     while process.poll() is None:
@@ -73,7 +118,7 @@ def compile_report(source, connection=None):
                 raise ValueError("Report has no extractable text. Include text in the document.")
             warnings = [line[:500] for line in log.splitlines()
                         if any(word in line.lower() for word in ("warning", "overfull", "underfull"))][:10]
-            return {"ok": True, "profile": PROFILE, "pdf": base64.b64encode(pdf.read_bytes()).decode(),
+            return {"ok": True, "profile": profile, "pdf": base64.b64encode(pdf.read_bytes()).decode(),
                     "pageCount": pages, "warnings": warnings, "text": extracted[:20000],
                     "textTruncated": len(extracted) > 20000}
         except (ValueError, OSError) as error:
@@ -93,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self):
-        self.reply(200 if self.path == "/health" else 404, {"profile": PROFILE})
+        self.reply(200 if self.path == "/health" else 404, {"profile": PROFILE, "profiles": [PROFILE, TEMPLATE_PROFILE]})
 
     def do_POST(self):
         if self.path != "/compile":
@@ -103,12 +148,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.connection.settimeout(5)
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 800000:
+            if not 0 < length <= 29000000:
                 return self.reply(413, {"ok": False, "error": "Request too large"})
             data = json.loads(self.rfile.read(length))
-            if data.get("profile") != PROFILE:
+            if data.get("profile") not in (PROFILE, TEMPLATE_PROFILE):
                 return self.reply(400, {"ok": False, "error": "Unsupported renderer profile"})
-            self.reply(200, compile_report(data.get("source"), self.connection))
+            self.reply(200, compile_report(data.get("source"), self.connection, data["profile"], data.get("resources", [])))
         except (ValueError, OSError):
             try:
                 self.reply(400, {"ok": False, "error": "Invalid or cancelled request"})

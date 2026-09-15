@@ -1510,3 +1510,144 @@ test("PDF capability, attachment selection, authenticated downloads and mobile s
   await expect(drawer).not.toBeVisible();
   await expect(reply).toBeVisible();
 });
+
+test("template editor uploads immutable logos, publishes, compiles, downloads and restores mobile focus", async ({
+  page,
+  request,
+}) => {
+  const { defaultPdfTemplate } =
+    await import("../../packages/contracts/src/pdf-templates");
+  const { default: sharp } = await import("sharp");
+  await signIn(page);
+  await createReceipt(page, "PDF template");
+  const workflowId = page.url().split("/").at(-1)!;
+  const origin = new URL(page.url()).origin;
+  const bootstrap = await (await page.request.get("/api/bootstrap")).json();
+  const draft: Workflow = bootstrap.workflows.find(
+    (w: { id: string }) => w.id === workflowId,
+  ).draft;
+  draft.nodes[0].data.recipient = `${workflowId}@example.com`;
+  draft.nodes[2].data.requiredTool = undefined;
+  draft.nodes.push({
+    id: "reply",
+    type: "send_email",
+    position: { x: 1100, y: 0 },
+    data: {
+      label: "Template reply",
+      bodyTemplate: "{{steps.agent.text}}",
+      reportSourceNodeId: "agent",
+    },
+  });
+  draft.edges.push({
+    id: "reply",
+    source: "agent",
+    target: "reply",
+    kind: "execution",
+  });
+  expect(
+    (
+      await page.request.put(`/api/workflows/${workflowId}`, {
+        headers: { origin },
+        data: draft,
+      })
+    ).ok(),
+  ).toBe(true);
+  await page.reload();
+  await page.getByRole("button", { name: "Add step", exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: "PDF template", exact: true })
+    .click();
+  await page
+    .getByLabel("Connected Agent", { exact: true })
+    .selectOption("agent");
+  await page
+    .getByLabel("Step name", { exact: true })
+    .fill("Assessment template");
+  await page
+    .getByLabel("MCP tool name", { exact: true })
+    .fill("create_assessment_pdf");
+  await page
+    .getByLabel("LaTeX template", { exact: true })
+    .fill(
+      defaultPdfTemplate.source.replace(
+        "<<assessment>>",
+        String.raw`\includegraphics[width=1cm]{assets/logo.png} <<assessment>>`,
+      ),
+    );
+  await page
+    .getByLabel("Description for assessment", { exact: true })
+    .fill("Write a synthetic assessment section");
+  const bytes = await sharp({
+    create: { width: 40, height: 20, channels: 3, background: "blue" },
+  })
+    .png()
+    .toBuffer();
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Upload image", exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({ name: "logo.png", mimeType: "image/png", buffer: bytes });
+  const download = page.getByRole("link", {
+    name: "Download logo.png",
+    exact: true,
+  });
+  await expect(download).toBeVisible();
+  const href = (await download.getAttribute("href"))!;
+  expect((await page.request.get(href)).status()).toBe(200);
+  expect((await request.get(href)).status()).toBe(401);
+  expect(
+    (await page.request.get(href.replace(workflowId, "foreign"))).status(),
+  ).toBe(404);
+  expect(
+    (
+      await page.request.post(
+        `/api/workflows/${workflowId}/resources?filename=bad.png`,
+        { headers: { origin }, data: Buffer.from("fake image") },
+      )
+    ).status(),
+  ).toBe(400);
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Published");
+  await page.reload();
+  await page.getByRole("button", { name: "Test run", exact: true }).click();
+  await expect(page.getByTestId("run-status")).toHaveText("succeeded", {
+    timeout: 40000,
+  });
+  const inspector = page.getByTestId("run-inspector");
+  await expect(
+    inspector.getByText(/Template: Assessment template/),
+  ).toBeVisible();
+  await expect(
+    inspector.getByText("Preview only", { exact: true }),
+  ).toBeVisible();
+  const pdfHref = (await inspector
+    .getByRole("link", { name: "Download email attachment" })
+    .getAttribute("href"))!;
+  expect((await page.request.get(pdfHref)).headers()["content-type"]).toBe(
+    "application/pdf",
+  );
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Fit View", exact: true }).click();
+  const template = page.locator('.react-flow__node[data-id="pdf_template"]');
+  await template.click();
+  const drawer = page.getByRole("dialog", {
+    name: "Step settings",
+    exact: true,
+  });
+  await expect(drawer.getByLabel("Step name", { exact: true })).toBeFocused();
+  await expect(
+    drawer.getByLabel("Description for assessment", { exact: true }),
+  ).toHaveValue("Write a synthetic assessment section");
+  await expect(
+    drawer.getByRole("link", { name: "Download logo.png", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(drawer).not.toBeVisible();
+  await expect(template).toBeFocused();
+});

@@ -170,6 +170,7 @@ export class MockProvider implements Provider {
   ): Promise<Message> {
     signal.throwIfAborted();
     if (
+      _config.generatePdf &&
       tools.some((t) => t.name === "generate_pdf") &&
       !messages.some((m) =>
         m.parts?.some((p) => p.functionResponse?.name === "generate_pdf"),
@@ -183,6 +184,33 @@ export class MockProvider implements Provider {
               id: "mock-pdf",
               name: "generate_pdf",
               args: { source: syntheticReportSource },
+            },
+          },
+        ],
+      };
+    const template = tools.find(
+      (t) =>
+        !("endpoint" in t) &&
+        (t.name !== "generate_pdf" || !_config.generatePdf) &&
+        t.name !== "finish_task" &&
+        !messages.some((m) =>
+          m.parts?.some((p) => p.functionResponse?.name === t.name),
+        ),
+    );
+    if (template)
+      return {
+        role: "model",
+        parts: [
+          {
+            functionCall: {
+              id: "mock-template-" + template.name,
+              name: template.name,
+              args: Object.fromEntries(
+                (template.inputSchema.required as string[]).map((name) => [
+                  name,
+                  "Synthetic " + name.replaceAll("_", " "),
+                ]),
+              ),
             },
           },
         ],

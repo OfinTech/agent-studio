@@ -1,4 +1,12 @@
 import {
+  uploadTemplateResource,
+  readTemplateResource,
+} from "../../../../../packages/runtime/src/template-resources";
+import {
+  IMAGE_MAX_BYTES,
+  imageResourcesSchema,
+} from "../../../../../packages/contracts/src/pdf-templates";
+import {
   resolveReport,
   validateReport,
 } from "../../../../../packages/runtime/src/report-execution";
@@ -50,7 +58,7 @@ class HttpError extends Error {
 }
 const response = (data: unknown, status = 200) =>
   NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
-async function body(request: NextRequest) {
+async function bytesBody(request: NextRequest, maximum = 262144) {
   const reader = request.body?.getReader();
   if (!reader) throw new HttpError(400, "Request body is required");
   const chunks: Uint8Array[] = [];
@@ -59,13 +67,16 @@ async function body(request: NextRequest) {
     const { done, value } = await reader.read();
     if (done) break;
     length += value.length;
-    if (length > 262144) {
+    if (length > maximum) {
       await reader.cancel();
-      throw new HttpError(413, "Request body exceeds 256 KB");
+      throw new HttpError(413, "Request body exceeds the upload limit");
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+async function body(request: NextRequest) {
+  return (await bytesBody(request)).toString("utf8");
 }
 async function handle(
   request: NextRequest,
@@ -238,6 +249,44 @@ async function handle(
       await saveDraft(id, workflow);
       return response({ id, draft: workflow }, 201);
     }
+    if (path[0] === "workflows" && path[2] === "resources") {
+      if (path.length === 3 && method === "POST") {
+        const existing = imageResourcesSchema.parse(
+          JSON.parse(request.headers.get("x-template-resources") ?? "[]"),
+        );
+        return response(
+          await uploadTemplateResource(
+            path[1],
+            request.nextUrl.searchParams.get("filename") ?? "",
+            await bytesBody(request, IMAGE_MAX_BYTES),
+            existing,
+          ),
+          201,
+        );
+      }
+      if (path.length === 4 && method === "GET") {
+        const [resource] = await query(
+          "SELECT metadata FROM template_resources WHERE workflow_id=$1 AND id=$2",
+          [path[1], path[3]],
+        );
+        if (!resource) throw new HttpError(404, "Template image not found");
+        try {
+          const image = resource.metadata;
+          const bytes = await readTemplateResource(path[1], image);
+          return new NextResponse(new Uint8Array(bytes), {
+            headers: {
+              "Content-Type": image.mimeType,
+              "Content-Disposition": `attachment; filename="${image.filename}"`,
+              "Content-Length": String(bytes.length),
+              "Cache-Control": "private, no-store",
+              "X-Content-Type-Options": "nosniff",
+            },
+          });
+        } catch {
+          throw new HttpError(404, "Template image is missing or invalid");
+        }
+      }
+    }
     if (path[0] === "workflows" && path.length === 2 && method === "DELETE") {
       await deleteWorkflow(path[1]);
       return response({ ok: true });
@@ -347,7 +396,7 @@ async function handle(
           path[1],
         ]),
         query(
-          "SELECT a.id,a.node_id,a.attempt_order,a.source_hash,a.renderer_profile,a.status,a.report_id,CASE WHEN r.finished_at < now()-interval '7 days' THEN a.result #- '{data,textPreview}' ELSE a.result END AS result,g.page_count,g.size,g.text_truncated,CASE WHEN r.finished_at < now()-interval '7 days' THEN NULL ELSE g.extracted_text END AS extracted_text,CASE WHEN r.finished_at < now()-interval '7 days' THEN r.finished_at ELSE g.expired_at END AS expired_at,(a.status='succeeded' AND g.expired_at IS NULL AND (r.finished_at IS NULL OR r.finished_at > now()-interval '7 days') AND a.attempt_order=(SELECT max(b.attempt_order) FROM report_attempts b WHERE b.run_id=a.run_id AND b.node_id=a.node_id)) AS current FROM report_attempts a JOIN runs r ON r.id=a.run_id LEFT JOIN generated_reports g ON g.id=a.report_id WHERE a.run_id=$1 ORDER BY a.node_id,a.attempt_order",
+          "SELECT a.id,a.node_id,a.template_node_id,a.generation_fingerprint,a.attempt_order,a.source_hash,a.renderer_profile,a.status,a.report_id,CASE WHEN r.finished_at < now()-interval '7 days' THEN a.result #- '{data,textPreview}' ELSE a.result END AS result,g.page_count,g.size,g.text_truncated,CASE WHEN r.finished_at < now()-interval '7 days' THEN NULL ELSE g.extracted_text END AS extracted_text,CASE WHEN r.finished_at < now()-interval '7 days' THEN r.finished_at ELSE g.expired_at END AS expired_at,(a.status='succeeded' AND g.expired_at IS NULL AND (r.finished_at IS NULL OR r.finished_at > now()-interval '7 days') AND a.attempt_order=(SELECT max(b.attempt_order) FROM report_attempts b WHERE b.run_id=a.run_id AND b.node_id=a.node_id)) AS current FROM report_attempts a JOIN runs r ON r.id=a.run_id LEFT JOIN generated_reports g ON g.id=a.report_id WHERE a.run_id=$1 ORDER BY a.node_id,a.attempt_order",
           [path[1]],
         ),
       ]);

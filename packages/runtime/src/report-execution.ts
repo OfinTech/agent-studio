@@ -1,7 +1,17 @@
+import {
+  TEMPLATE_PROFILE,
+  renderTemplate,
+  type ImageResource,
+} from "../../contracts/src/pdf-templates";
+import { compilationResources } from "./template-resources";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { query, transaction } from "../../persistence/src/index";
-import { type ToolResult, type WorkflowNode } from "../../contracts/src/index";
+import {
+  ConfigurationError,
+  type ToolResult,
+  type WorkflowNode,
+} from "../../contracts/src/index";
 import {
   REPORT_MAX_BYTES,
   REPORT_PROFILE,
@@ -20,7 +30,7 @@ const input = z
   .strict();
 const compiled = z.object({
   ok: z.literal(true),
-  profile: z.literal(REPORT_PROFILE),
+  profile: z.enum([REPORT_PROFILE, TEMPLATE_PROFILE]),
   pdf: z.string().max(13981016),
   pageCount: z.number().int().min(1).max(20),
   warnings: z.array(z.string().max(500)).max(10),
@@ -31,8 +41,14 @@ export type CompileReport = (
   source: string,
   profile: string,
   signal: AbortSignal,
+  resources?: (ImageResource & { content: string })[],
 ) => Promise<z.infer<typeof compiled> | { ok: false; error: string }>;
-export const compileReport: CompileReport = async (source, profile, signal) => {
+export const compileReport: CompileReport = async (
+  source,
+  profile,
+  signal,
+  resources = [],
+) => {
   let response: Response;
   try {
     response = await fetch(
@@ -43,7 +59,7 @@ export const compileReport: CompileReport = async (source, profile, signal) => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source, profile }),
+        body: JSON.stringify({ source, profile, resources }),
         signal: AbortSignal.any([signal, AbortSignal.timeout(35000)]),
         redirect: "error",
       },
@@ -77,6 +93,7 @@ type Attempt = {
   id: string;
   status: string;
   source_hash: string;
+  generation_fingerprint: string | null;
   renderer_profile: string;
   result: ToolResult;
   report_id: string | null;
@@ -88,14 +105,48 @@ export async function generateReport(
   args: unknown,
   signal: AbortSignal,
   compile: CompileReport = compileReport,
+  templateNode?: WorkflowNode,
 ): Promise<ToolResult> {
-  const parsed = input.safeParse(args);
+  let rendered: unknown = args;
+  let templateError: string | undefined;
+  if (templateNode) {
+    try {
+      rendered = {
+        source: renderTemplate(templateNode.data.pdfTemplate!, args),
+      };
+    } catch (error) {
+      templateError = (error as Error).message;
+      rendered = undefined;
+    }
+  }
+  const parsed = input.safeParse(rendered);
   const hash = createHash("sha256")
     .update(
       parsed.success ? parsed.data.source : (JSON.stringify(args) ?? "null"),
     )
     .digest("hex");
-  const profile = node.data.rendererProfile;
+  const profile = (templateNode ?? node).data.rendererProfile;
+  const images = templateNode?.data.pdfTemplate?.images ?? [];
+  const fingerprintFor = (
+    sourceHash: string,
+    profile: string | undefined,
+    images: ImageResource[],
+  ) =>
+    createHash("sha256")
+      .update(
+        JSON.stringify({
+          sourceHash,
+          profile,
+          images: [...images]
+            .sort((a, b) => a.filename.localeCompare(b.filename))
+            .map((image) => ({
+              filename: image.filename,
+              checksum: image.checksum,
+            })),
+        }),
+      )
+      .digest("hex");
+  const fingerprint = fingerprintFor(hash, profile, images);
   const attempt = await transaction(async (client) => {
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,1))", [
       runId + ":" + node.id,
@@ -108,17 +159,30 @@ export async function generateReport(
     if (existing) return existing;
     const same = rows.find(
       (r) =>
-        r.source_hash === hash &&
-        r.renderer_profile === profile &&
+        (r.generation_fingerprint === fingerprint ||
+          (!templateNode &&
+            !r.generation_fingerprint &&
+            r.source_hash === hash &&
+            r.renderer_profile === profile)) &&
         r.status !== "running",
     );
-    const limit = !same && new Set(rows.map((r) => r.source_hash)).size >= 3;
+    const limit =
+      !same &&
+      new Set(
+        rows.map(
+          (r) =>
+            r.generation_fingerprint ??
+            fingerprintFor(r.source_hash, r.renderer_profile, []),
+        ),
+      ).size >= 3;
     const result: ToolResult | null = !parsed.success
       ? {
           ok: false,
-          error: "Provide only source: nonempty LaTeX, at most 128 KiB UTF-8.",
+          error:
+            templateError ??
+            "Provide nonempty LaTeX, at most 128 KiB UTF-8, using only the required parameters.",
         }
-      : profile !== REPORT_PROFILE
+      : profile !== (templateNode ? TEMPLATE_PROFILE : REPORT_PROFILE)
         ? {
             ok: false,
             error:
@@ -134,7 +198,7 @@ export async function generateReport(
     const {
       rows: [created],
     } = await client.query<Attempt>(
-      "INSERT INTO report_attempts(id,run_id,node_id,attempt_order,source_hash,renderer_profile,status,result,report_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",
+      "INSERT INTO report_attempts(id,run_id,node_id,attempt_order,source_hash,renderer_profile,status,result,report_id,generation_fingerprint,template_node_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
       [
         callId,
         runId,
@@ -145,13 +209,40 @@ export async function generateReport(
         result ? (result.ok ? "succeeded" : "failed") : "running",
         result ? JSON.stringify(result) : null,
         result?.ok ? same?.report_id : null,
+        fingerprint,
+        templateNode?.id ?? null,
       ],
     );
     return created;
   });
   if (attempt.status !== "running") return attempt.result;
   signal.throwIfAborted();
-  const response = await compile(parsed.data!.source, profile!, signal);
+  let resources: (ImageResource & { content: string })[];
+  try {
+    resources = await compilationResources(runId, images);
+  } catch (error) {
+    if (
+      !(error instanceof ConfigurationError) &&
+      !(error instanceof z.ZodError)
+    )
+      throw error;
+    const result = {
+      ok: false,
+      error:
+        "Template image is missing, corrupt or invalid. Restore the resource or publish a corrected template.",
+    };
+    await query(
+      "UPDATE report_attempts SET status='failed',result=$2 WHERE id=$1",
+      [callId, JSON.stringify(result)],
+    );
+    return result;
+  }
+  const response = await compile(
+    parsed.data!.source,
+    profile!,
+    signal,
+    resources,
+  );
   let result: ToolResult;
   if (!response.ok) {
     result = { ok: false, error: response.error.slice(0, 4000) };
@@ -161,6 +252,10 @@ export async function generateReport(
     );
   } else {
     const data = compiled.parse(response);
+    if (data.profile !== profile)
+      throw new RetryError(
+        "PDF compiler returned a different renderer profile",
+      );
     const bytes = Buffer.from(data.pdf, "base64");
     if (
       bytes.length > REPORT_MAX_BYTES ||
@@ -263,8 +358,14 @@ export async function cleanupReports() {
     "UPDATE report_attempts a SET result=result #- '{data,textPreview}' FROM runs r WHERE r.id=a.run_id AND r.finished_at < now()-interval '7 days' AND result->'data' ? 'textPreview'",
   );
   for (const row of await query(
-    "SELECT c.run_id,c.state FROM checkpoints c JOIN runs r ON r.id=c.run_id WHERE r.finished_at < now()-interval '7 days' AND c.state::text LIKE '%textPreview%'",
+    "SELECT c.run_id,c.state,v.snapshot FROM checkpoints c JOIN runs r ON r.id=c.run_id JOIN versions v ON v.id=r.version_id WHERE r.finished_at < now()-interval '7 days' AND c.state::text LIKE '%textPreview%'",
   )) {
+    const names = new Set([
+      "generate_pdf",
+      ...(row.snapshot.workflow.nodes as WorkflowNode[])
+        .filter((n) => n.type === "pdf_template")
+        .map((n) => n.data.pdfTemplate?.toolName),
+    ]);
     let changed = false;
     for (const node of Object.values(row.state.nodes ?? {}) as {
       messages?: {
@@ -280,8 +381,9 @@ export async function cleanupReports() {
         for (const part of message.parts ?? []) {
           const response = part.functionResponse;
           if (
-            response?.name === "generate_pdf" &&
-            response.response?.data &&
+            names.has(response?.name) &&
+            response?.response?.data &&
+            Object.hasOwn(response.response.data, "reportId") &&
             Object.hasOwn(response.response.data, "textPreview")
           ) {
             delete response.response.data.textPreview;

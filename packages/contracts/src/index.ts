@@ -1,3 +1,8 @@
+import {
+  attachedTemplates,
+  pdfTemplateSchema,
+  detectPlaceholders,
+} from "./pdf-templates";
 import { reportSources, type ReportReference } from "./reports";
 import { z } from "zod";
 
@@ -39,6 +44,7 @@ export const nodeSchema = z.object({
     "upload",
     "agent",
     "tool",
+    "pdf_template",
     "outcome",
     "action",
     "send_email",
@@ -71,6 +77,7 @@ export const nodeSchema = z.object({
       .max(20)
       .optional(),
     arguments: z.record(z.unknown()).optional(),
+    pdfTemplate: pdfTemplateSchema.optional(),
     generatePdf: z.boolean().optional(),
     rendererProfile: z.string().max(100).optional(),
     reportSourceNodeId: id.optional(),
@@ -130,7 +137,9 @@ export type ToolResult = {
 export class ConfigurationError extends Error {}
 export type Snapshot = { workflow: Workflow; tools: ToolDefinition[] };
 export function executionOrder(workflow: Workflow): WorkflowNode[] {
-  const nodes = workflow.nodes.filter((n) => n.type !== "tool");
+  const nodes = workflow.nodes.filter(
+    (n) => n.type !== "tool" && n.type !== "pdf_template",
+  );
   const edges = workflow.edges.filter((e) => e.kind === "execution");
   const start = nodes.find((n) => n.type === "email");
   if (!start) return [];
@@ -153,6 +162,7 @@ const executionTargets: Record<
   action: ["agent", "action", "send_email"],
   outcome: ["agent", "action", "send_email"],
   tool: [],
+  pdf_template: [],
   send_email: [],
 };
 function validExecutionTypes(
@@ -170,7 +180,7 @@ export function canConnect(
   if (!source || !target || source.id === target.id) return false;
   if (edge.kind === "tool")
     return (
-      source.type === "tool" &&
+      (source.type === "tool" || source.type === "pdf_template") &&
       target.type === "agent" &&
       !edge.stateId &&
       !workflow.edges.some((e) => e.kind === "tool" && e.source === source.id)
@@ -392,7 +402,11 @@ export function validateWorkflow(
       continue;
     }
     if (e.kind === "tool") {
-      if (s.type !== "tool" || t.type !== "agent" || e.stateId)
+      if (
+        (s.type !== "tool" && s.type !== "pdf_template") ||
+        t.type !== "agent" ||
+        e.stateId
+      )
         errors.push("Tool connections must connect a tool to the agent.");
     } else {
       const valid = validExecutionTypes(s.type, t.type);
@@ -456,7 +470,15 @@ export function validateWorkflow(
         errors.push(
           "generate_pdf conflicts with the built-in PDF report tool.",
         );
-      if (new Set(attached.map((t) => t.name)).size !== attached.length)
+      const names = [
+        ...attached.map((t) => t.name),
+        ...attachedTemplates(workflow, n.id).map(
+          (t) => t.data.pdfTemplate?.toolName,
+        ),
+        ...(n.data.generatePdf ? ["generate_pdf"] : []),
+        "finish_task",
+      ];
+      if (new Set(names).size !== names.length)
         errors.push("Attached tool names must be unique.");
       if (
         !connectedOutcome(workflow, n.id) &&
@@ -471,11 +493,23 @@ export function validateWorkflow(
     )
       errors.push("Select an existing tool.");
     if (
-      n.type === "tool" &&
+      (n.type === "tool" || n.type === "pdf_template") &&
       workflow.edges.filter((e) => e.kind === "tool" && e.source === n.id)
         .length !== 1
     )
       errors.push("Select an existing tool and connect it to the agent.");
+    if (n.type === "pdf_template") {
+      const template = n.data.pdfTemplate;
+      if (!template?.source.trim())
+        errors.push("Configure a nonempty PDF template.");
+      else {
+        try {
+          detectPlaceholders(template.source);
+        } catch (error) {
+          errors.push((error as Error).message);
+        }
+      }
+    }
     if (n.type === "send_email" && !n.data.bodyTemplate?.trim())
       errors.push("Configure a nonempty email body template.");
     if (n.type === "action" && !n.data.arguments)
@@ -585,7 +619,12 @@ export function validateWorkflow(
   }
   const start = workflow.nodes.find((n) => n.type === "email");
   if (start) visit(start.id, [], {});
-  if (workflow.nodes.some((n) => n.type !== "tool" && !visited.has(n.id)))
+  if (
+    workflow.nodes.some(
+      (n) =>
+        n.type !== "tool" && n.type !== "pdf_template" && !visited.has(n.id),
+    )
+  )
     errors.push("All execution nodes must be reachable from Email.");
   return [...new Set(errors)];
 }

@@ -1,4 +1,5 @@
 "use client";
+import { PdfTemplateSettings } from "./pdf-template-settings";
 import { reportSources } from "../../../packages/contracts/src/reports";
 import {
   Button,
@@ -98,6 +99,9 @@ export function NodeSettings({
               Total limit: 20 MB. Files expire after seven days.
             </Text>
           </>
+        )}
+        {node.type === "pdf_template" && node.data.pdfTemplate && (
+          <PdfTemplateSettings key={node.id} controller={c} node={node} />
         )}
         {node.type === "agent" && <AgentSettings controller={c} node={node} />}
         {(node.type === "tool" || node.type === "action") && (

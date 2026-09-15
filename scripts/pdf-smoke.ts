@@ -98,3 +98,73 @@ const timeout = await compile(
 );
 assert(!timeout.ok);
 console.log("PASS bounded timeout");
+
+// Real template compilation covers both raster formats and hostile resource metadata.
+const { defaultPdfTemplate, renderTemplate, TEMPLATE_PROFILE } =
+  await import("../packages/contracts/src/pdf-templates");
+const { reportChecksum } = await import("../packages/connectors/src/reports");
+const { default: sharp } = await import("sharp");
+const resources: (import("../packages/contracts/src/pdf-templates").ImageResource & {
+  content: string;
+})[] = [];
+for (const format of ["png", "jpeg"] as const) {
+  const bytes = await sharp({
+    create: { width: 40, height: 20, channels: 3, background: "blue" },
+  })
+    .toFormat(format)
+    .toBuffer();
+  resources.push({
+    id: "11111111-1111-4111-8111-111111111111",
+    filename: format === "png" ? "logo.png" : "logo.jpg",
+    mimeType: `image/${format}` as "image/png" | "image/jpeg",
+    checksum: reportChecksum(bytes),
+    size: bytes.length,
+    content: bytes.toString("base64"),
+  });
+}
+const templateSource = renderTemplate(
+  {
+    ...defaultPdfTemplate,
+    source: defaultPdfTemplate.source.replace(
+      "<<assessment>>",
+      String.raw`\includegraphics[width=1cm]{assets/logo.png}\includegraphics[width=1cm]{assets/logo.jpg} <<assessment>>`,
+    ),
+  },
+  {
+    title: "Synthetic assessment",
+    assessment: String.raw`\section{Agent section} Synthetic agent-provided assessment.`,
+  },
+);
+const imageReport = await compileReport(
+  templateSource,
+  TEMPLATE_PROFILE,
+  signal(),
+  resources,
+);
+assert(imageReport.ok, JSON.stringify(imageReport));
+assert(imageReport.text.includes("Synthetic agent-provided assessment"));
+for (const invalid of [
+  [],
+  [{ ...resources[0], filename: "../logo.png" }],
+  [resources[0], resources[0]],
+  [{ ...resources[0], checksum: "0".repeat(64) }],
+  [{ ...resources[0], content: "broken" }],
+  Array.from({ length: 11 }, (_, i) => ({
+    ...resources[0],
+    filename: `logo${i}.png`,
+  })),
+]) {
+  assert(
+    !(await compileReport(templateSource, TEMPLATE_PROFILE, signal(), invalid))
+      .ok,
+    "Invalid resources must fail",
+  );
+}
+assert(
+  !(await compileReport(templateSource, REPORT_PROFILE, signal(), resources))
+    .ok,
+  "Old renderer rejects uploaded resources",
+);
+console.log(
+  "PASS offline template logos, raw Agent sections, missing/corrupt resources and filename isolation",
+);

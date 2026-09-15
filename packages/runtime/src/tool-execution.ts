@@ -1,3 +1,4 @@
+import { templateTool } from "../../contracts/src/pdf-templates";
 import { generatePdfTool } from "../../contracts/src/reports";
 import { generateReport, type CompileReport } from "./report-execution";
 import { createHash } from "node:crypto";
@@ -33,6 +34,7 @@ export async function durableToolSession({
   signal,
   dispatch,
   compileReport,
+  templateNodes = [],
 }: {
   runId: string;
   node: WorkflowNode;
@@ -41,6 +43,7 @@ export async function durableToolSession({
   signal: AbortSignal;
   dispatch?: ToolDispatch;
   compileReport?: CompileReport;
+  templateNodes?: WorkflowNode[];
 }) {
   const json = JSON.stringify;
   let currentCall = "";
@@ -123,28 +126,33 @@ export async function durableToolSession({
         ],
       );
     },
-    node.type === "agent" && node.data.generatePdf
-      ? [
-          {
-            definition: generatePdfTool,
-            invoke: async (args) => {
-              try {
-                return await generateReport(
-                  runId,
-                  node,
-                  currentCall,
-                  args,
-                  signal,
-                  compileReport,
-                );
-              } catch (error) {
-                builtinError = error;
-                return { ok: false, error: "PDF generation interrupted" };
-              }
-            },
-          },
-        ]
-      : [],
+    [
+      ...(node.type === "agent" && node.data.generatePdf
+        ? [{ definition: generatePdfTool, template: undefined }]
+        : []),
+      ...templateNodes.map((template) => ({
+        definition: templateTool(template.data.pdfTemplate!),
+        template,
+      })),
+    ].map(({ definition, template }) => ({
+      definition,
+      invoke: async (args: unknown) => {
+        try {
+          return await generateReport(
+            runId,
+            node,
+            currentCall,
+            args,
+            signal,
+            compileReport,
+            template,
+          );
+        } catch (error) {
+          builtinError = error;
+          return { ok: false, error: "PDF generation interrupted" };
+        }
+      },
+    })),
   );
 
   const invoke = async (

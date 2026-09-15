@@ -205,6 +205,9 @@ export function RunInspector({
               <Stack gap="md" key={report.id}>
                 <Text>
                   {report.node_id} · Attempt {report.attempt_order}
+                  {report.template_node_id
+                    ? ` · Template: ${run.snapshot?.workflow.nodes.find((n) => n.id === report.template_node_id)?.data.label ?? report.template_node_id}`
+                    : ""}
                   {report.current ? " · Current report" : ""}
                 </Text>
                 <Badge color={statusColor(report.status)}>

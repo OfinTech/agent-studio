@@ -208,6 +208,8 @@ export const reportAttempts = pgTable(
     nodeId: text("node_id").notNull(),
     attemptOrder: integer("attempt_order").notNull(),
     sourceHash: text("source_hash").notNull(),
+    generationFingerprint: text("generation_fingerprint"),
+    templateNodeId: text("template_node_id"),
     rendererProfile: text("renderer_profile").notNull(),
     status: text("status").notNull(),
     result: jsonb("result"),
@@ -226,4 +228,19 @@ export const reportAttempts = pgTable(
       sql`${t.status} IN ('running','succeeded','failed')`,
     ),
   ],
+);
+
+export const templateResources = pgTable(
+  "template_resources",
+  {
+    id: text("id").primaryKey(),
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflows.id),
+    metadata: jsonb("metadata")
+      .$type<import("../../contracts/src/pdf-templates").ImageResource>()
+      .notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("template_resources_workflow").on(t.workflowId)],
 );

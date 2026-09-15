@@ -70,5 +70,6 @@ jobs:
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H 84.8.97.88 >> ~/.ssh/known_hosts
-      - run: rsync -az --delete --exclude-from=.dockerignore --exclude=.env ./ "$SERVER:agent-platform/"
-      - run: ssh "$SERVER" 'cd agent-platform && docker compose -f docker-compose.prod.yml up --build -d --remove-orphans'
+      - run: ssh "$SERVER" "mkdir -p agent-platform-releases/$GITHUB_SHA"
+      - run: rsync -az --delete --exclude-from=.dockerignore --exclude=.env ./ "$SERVER:agent-platform-releases/$GITHUB_SHA/"
+      - run: ssh "$SERVER" "bash agent-platform-releases/$GITHUB_SHA/scripts/deploy.sh $GITHUB_SHA agent-platform-releases/$GITHUB_SHA"

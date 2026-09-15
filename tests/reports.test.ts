@@ -1,3 +1,7 @@
+import {
+  defaultPdfTemplate,
+  templateTool,
+} from "../packages/contracts/src/pdf-templates";
 import { expect, it, vi } from "vitest";
 import {
   receiptWorkflow,
@@ -154,7 +158,7 @@ for (const kind of ["gemini", "openai", "claude"] as const) {
       await provider.infer(
         messages,
         config,
-        [generatePdfTool],
+        [generatePdfTool, templateTool(defaultPdfTemplate)],
         AbortSignal.timeout(2000),
       );
       payload = generateContent.mock.calls[0][0];
@@ -188,7 +192,7 @@ for (const kind of ["gemini", "openai", "claude"] as const) {
       await provider.infer(
         messages,
         config,
-        [generatePdfTool],
+        [generatePdfTool, templateTool(defaultPdfTemplate)],
         AbortSignal.timeout(2000),
       );
       payload = JSON.parse(
@@ -198,6 +202,8 @@ for (const kind of ["gemini", "openai", "claude"] as const) {
     }
     const serialized = JSON.stringify(payload);
     expect(serialized).toContain("generate_pdf");
+    expect(serialized).toContain("create_assessment_pdf");
+    expect(serialized).toContain("Assessment section as LaTeX");
     expect(serialized).toContain("textPreview");
     expect(serialized).not.toContain("base64");
     expect(serialized).not.toContain("application/pdf");

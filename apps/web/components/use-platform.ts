@@ -1,4 +1,9 @@
 "use client";
+import {
+  defaultPdfTemplate,
+  imageResourcesSchema,
+  type ImageResource,
+} from "../../../packages/contracts/src/pdf-templates";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   receiptWorkflow,
@@ -211,9 +216,14 @@ export function usePlatform() {
       type,
       position: { x: 1000, y: 150 },
       data:
-        type === "send_email"
-          ? { label: "Send email", subjectTemplate: "", bodyTemplate: "" }
-          : { label: "Tool action", arguments: {} },
+        type === "pdf_template"
+          ? {
+              label: "PDF template",
+              pdfTemplate: structuredClone(defaultPdfTemplate),
+            }
+          : type === "send_email"
+            ? { label: "Send email", subjectTemplate: "", bodyTemplate: "" }
+            : { label: "Tool action", arguments: {} },
     };
     const id = draft.nodes.some((n) => n.id === type)
       ? type + "-" + crypto.randomUUID()
@@ -258,7 +268,44 @@ export function usePlatform() {
     setModal(null);
     router.push("/workflows");
   }
+  function addTemplateImage(id: string, nodeId: string, image: ImageResource) {
+    setDrafts((previous) => {
+      const current =
+        previous[id]?.draft ?? data?.workflows.find((w) => w.id === id)?.draft;
+      const node = current?.nodes.find((n) => n.id === nodeId);
+      if (!current || !node?.data.pdfTemplate) return previous;
+      const images = imageResourcesSchema.safeParse([
+        ...node.data.pdfTemplate.images,
+        image,
+      ]);
+      if (!images.success) return previous;
+      return {
+        ...previous,
+        [id]: {
+          dirty: true,
+          draft: {
+            ...current,
+            nodes: current.nodes.map((n) =>
+              n.id === nodeId
+                ? {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      pdfTemplate: {
+                        ...node.data.pdfTemplate!,
+                        images: images.data,
+                      },
+                    },
+                  }
+                : n,
+            ),
+          },
+        },
+      };
+    });
+  }
   return {
+    addTemplateImage,
     addOutcome,
     deleteWorkflow,
     navigate,

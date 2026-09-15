@@ -57,6 +57,13 @@
       "when": 1789400000000,
       "tag": "0007_pdf_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789475099562,
+      "tag": "0008_pdf_templates",
+      "breakpoints": true
     }
   ]
 }

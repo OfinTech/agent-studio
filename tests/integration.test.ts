@@ -1,3 +1,8 @@
+import sharp from "sharp";
+import {
+  defaultPdfTemplate,
+  TEMPLATE_PROFILE,
+} from "../packages/contracts/src/pdf-templates";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import pg from "pg";
@@ -1996,5 +2001,258 @@ suite("PostgreSQL execution and recovery", () => {
     expect(file.extracted_text).toBeNull();
     expect(file.expired_at).not.toBeNull();
     expect(file.checksum).toBeDefined();
+  });
+  async function templateWorkflow() {
+    const w = await pdfWorkflow();
+    const resources =
+      await import("../packages/runtime/src/template-resources");
+    const bytes = await sharp({
+      create: { width: 40, height: 20, channels: 3, background: "blue" },
+    })
+      .png()
+      .toBuffer();
+    const image = await resources.uploadTemplateResource(
+      w.id,
+      "logo.png",
+      bytes,
+    );
+    w.draft.nodes[2].data.generatePdf = false;
+    w.draft.nodes.push({
+      id: "template",
+      type: "pdf_template",
+      position: { x: 0, y: 300 },
+      data: {
+        label: "Assessment template",
+        pdfTemplate: {
+          ...structuredClone(defaultPdfTemplate),
+          images: [image],
+        },
+        rendererProfile: TEMPLATE_PROFILE,
+      },
+    });
+    w.draft.edges.push({
+      id: "template-edge",
+      source: "template",
+      target: "agent",
+      kind: "tool",
+    });
+    await runtime.saveDraft(w.id, w.draft);
+    w.version = await runtime.publish(w.id);
+    return { ...w, image, bytes, resources };
+  }
+  const templateCompile = async (source: string) => ({
+    ...(await fakeCompile(source)),
+    profile: TEMPLATE_PROFILE as typeof TEMPLATE_PROFILE,
+  });
+  it("publishes immutable template images, retains published resources, expires abandoned uploads and deletes workflow resources", async () => {
+    const w = await templateWorkflow();
+    const replacement = await w.resources.uploadTemplateResource(
+      w.id,
+      "logo.png",
+      w.bytes,
+    );
+    const abandoned = await w.resources.uploadTemplateResource(
+      w.id,
+      "unused.png",
+      w.bytes,
+    );
+    w.draft.nodes.at(-1)!.data.pdfTemplate!.images = [replacement];
+    await runtime.saveDraft(w.id, w.draft);
+    const [version] = await persistence.query(
+      "SELECT snapshot FROM versions WHERE id=$1",
+      [w.version.id],
+    );
+    expect(
+      version.snapshot.workflow.nodes.at(-1).data.pdfTemplate.images,
+    ).toEqual([w.image]);
+    expect(version.snapshot.workflow.nodes.at(-1).data.rendererProfile).toBe(
+      TEMPLATE_PROFILE,
+    );
+    await persistence.query(
+      "UPDATE template_resources SET created_at=now()-interval '8 days' WHERE workflow_id=$1",
+      [w.id],
+    );
+    await w.resources.cleanupTemplateResources();
+    expect(await w.resources.readTemplateResource(w.id, w.image)).toEqual(
+      w.bytes,
+    );
+    expect(await w.resources.readTemplateResource(w.id, replacement)).toEqual(
+      w.bytes,
+    );
+    await expect(
+      w.resources.readTemplateResource(w.id, abandoned),
+    ).rejects.toThrow();
+    await expect(
+      w.resources.readTemplateResource("foreign", w.image),
+    ).rejects.toThrow();
+    const foreign = await workflow();
+    foreign.draft.nodes.push(w.draft.nodes.at(-1)!);
+    await expect(runtime.saveDraft(foreign.id, foreign.draft)).rejects.toThrow(
+      "does not belong",
+    );
+    await expect(
+      w.resources.uploadTemplateResource(w.id, "logo.png", w.bytes, [w.image]),
+    ).rejects.toThrow("Duplicate");
+    await runtime.deleteWorkflow(w.id);
+    const { TemplateResourceStorage } =
+      await import("../packages/connectors/src/template-resources");
+    await expect(
+      new TemplateResourceStorage().readImage(w.image),
+    ).rejects.toThrow("missing");
+  });
+  it("shares fingerprints, recovery, latest selection and three attempts across PDF tools and attributes template attempts", async () => {
+    const w = await templateWorkflow(),
+      run = await runFor(w.version.id);
+    const { generateReport, currentReport } =
+      await import("../packages/runtime/src/report-execution");
+    const agent = w.draft.nodes[2],
+      template = w.draft.nodes.at(-1)!;
+    const compile = vi.fn(templateCompile);
+    const call = (id: string, args: unknown, node = template) =>
+      generateReport(
+        run.id,
+        agent,
+        run.id + id,
+        args,
+        AbortSignal.timeout(10000),
+        compile,
+        node,
+      );
+    const args = { title: "First", assessment: "" };
+    const first = await call("one", args);
+    expect(first.ok).toBe(true);
+    expect(
+      await call("same", args, { ...template, id: "another-template" }),
+    ).toEqual(first);
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(compile.mock.calls[0][0]).toContain("First");
+    expect(await call("same", { title: "ignored", assessment: "" })).toEqual(
+      first,
+    );
+    const revised = structuredClone(template);
+    revised.data.pdfTemplate!.images = [
+      { ...w.image, checksum: "0".repeat(64) },
+    ];
+    expect((await call("changed-image", args, revised)).ok).toBe(false);
+    expect(await currentReport(run.id, agent.id)).toBeUndefined();
+    expect((await call("missing-arg", { title: "Bad" })).ok).toBe(false);
+    const freeform = await generateReport(
+      run.id,
+      {
+        ...agent,
+        data: {
+          ...agent.data,
+          rendererProfile: "tectonic-0.15.0-bundle33-report-v1",
+        },
+      },
+      run.id + "freeform",
+      { source: "Fourth source" },
+      AbortSignal.timeout(10000),
+      fakeCompile,
+    );
+    expect(freeform.error).toContain("Three distinct");
+    expect(await call("reuse", args)).toEqual(first);
+    expect((await currentReport(run.id, agent.id))?.reportId).toBe(
+      (first.data as { reportId: string }).reportId,
+    );
+    const attempts = await persistence.query(
+      "SELECT * FROM report_attempts WHERE run_id=$1 ORDER BY attempt_order",
+      [run.id],
+    );
+    expect(attempts[1].template_node_id).toBe("another-template");
+    expect(attempts[0].generation_fingerprint).toBe(
+      attempts[1].generation_fingerprint,
+    );
+    expect(attempts[2].generation_fingerprint).not.toBe(
+      attempts[0].generation_fingerprint,
+    );
+    const recoveryRun = await runFor(w.version.id);
+    const interrupted = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("interrupted"))
+      .mockImplementation(templateCompile);
+    const recover = () =>
+      generateReport(
+        recoveryRun.id,
+        agent,
+        recoveryRun.id + "pdf",
+        args,
+        AbortSignal.timeout(10000),
+        interrupted,
+        template,
+      );
+    await expect(recover()).rejects.toThrow("interrupted");
+    expect((await recover()).ok).toBe(true);
+    expect(
+      await persistence.query(
+        "SELECT id FROM report_attempts WHERE run_id=$1",
+        [recoveryRun.id],
+      ),
+    ).toHaveLength(1);
+  });
+  it("runs template MCP through the Agent, attaches its backend report in Test mode and never dispatches", async () => {
+    const w = await templateWorkflow(),
+      run = await runFor(w.version.id);
+    await persistence.query("UPDATE emails SET raw=$2 WHERE id=$1", [
+      run.email.id,
+      JSON.stringify({ test: true }),
+    ]);
+    const send = vi.fn(),
+      compile = vi.fn(templateCompile);
+    await runtime.executeRun(run.id, {
+      compileReport: compile,
+      sendEmail: send,
+    });
+    expect((await status(run.id)).status).toBe("succeeded");
+    expect(send).not.toHaveBeenCalled();
+    const [email] = await persistence.query(
+      "SELECT * FROM email_sends WHERE run_id=$1",
+      [run.id],
+    );
+    expect(email.message.attachments).toHaveLength(1);
+    const [attempt] = await persistence.query(
+      "SELECT * FROM report_attempts WHERE run_id=$1",
+      [run.id],
+    );
+    expect(attempt.template_node_id).toBe("template");
+    expect(email.message.attachments[0].reportId).toBe(attempt.report_id);
+    expect((compile.mock.calls[0] as unknown[])[3]).toEqual([
+      { ...w.image, content: w.bytes.toString("base64") },
+    ]);
+  });
+  it("does not double-count legacy source attempts when a running workflow upgrades to fingerprints", async () => {
+    const w = await pdfWorkflow(),
+      run = await runFor(w.version.id);
+    const { generateReport } =
+      await import("../packages/runtime/src/report-execution");
+    const node = {
+      ...w.draft.nodes[2],
+      data: {
+        ...w.draft.nodes[2].data,
+        rendererProfile: "tectonic-0.15.0-bundle33-report-v1",
+      },
+    };
+    const compile = vi.fn(fakeCompile);
+    const call = (id: string, source: string) =>
+      generateReport(
+        run.id,
+        node,
+        run.id + id,
+        { source },
+        AbortSignal.timeout(10000),
+        compile,
+      );
+    const first = await call("first", "first source");
+    await persistence.query(
+      "UPDATE report_attempts SET generation_fingerprint=NULL WHERE run_id=$1",
+      [run.id],
+    );
+    expect(await call("reused", "first source")).toEqual(first);
+    expect((await call("second", "second source")).ok).toBe(true);
+    expect((await call("third", "third source")).ok).toBe(true);
+    expect((await call("fourth", "fourth source")).error).toContain(
+      "Three distinct",
+    );
+    expect(compile).toHaveBeenCalledTimes(3);
   });
 });

@@ -1,3 +1,9 @@
+import {
+  attachedTemplates,
+  templateTool,
+  templateInstructions,
+} from "../../contracts/src/pdf-templates";
+import { cleanupTemplateResources } from "./template-resources";
 import { generatePdfTool, pdfInstructions } from "../../contracts/src/reports";
 import {
   currentReport,
@@ -232,10 +238,15 @@ export async function executeRun(
             ? t.id === node.data.toolId
             : attachedIds.includes(t.id),
         );
+        const templateNodes =
+          node.type === "agent" ? attachedTemplates(workflow, node.id) : [];
+        const reportsEnabled =
+          node.data.generatePdf || templateNodes.length > 0;
         session = await durableToolSession({
           runId,
           node,
           nodeTools,
+          templateNodes,
           legacyCalls: state.legacyCalls,
           signal,
           dispatch: overrides.dispatch,
@@ -320,10 +331,12 @@ export async function executeRun(
                 ? node.data.systemPrompt!
                 : renderPrompt(node.data.systemPrompt!, context)) +
               (outcome ? "\n\n" + completionInstructions(outcome) : "") +
-              (node.data.generatePdf ? "\n\n" + pdfInstructions : ""),
+              (node.data.generatePdf ? "\n\n" + pdfInstructions : "") +
+              (templateNodes.length ? "\n\n" + templateInstructions : ""),
           };
           const declarations = [
             ...nodeTools,
+            ...templateNodes.map((n) => templateTool(n.data.pdfTemplate!)),
             ...(node.data.generatePdf ? [generatePdfTool] : []),
             ...(outcome ? [completionTool(outcome)] : []),
           ];
@@ -361,7 +374,7 @@ export async function executeRun(
                 await complete(
                   node.id,
                   {
-                    ...(node.data.generatePdf
+                    ...(reportsEnabled
                       ? { report: await currentReport(runId, node.id) }
                       : {}),
                     text: report.result,
@@ -406,7 +419,7 @@ export async function executeRun(
                 await complete(
                   node.id,
                   {
-                    ...(node.data.generatePdf
+                    ...(reportsEnabled
                       ? { report: await currentReport(runId, node.id) }
                       : {}),
                     text: local.pending.parts
@@ -506,6 +519,7 @@ export async function maintenance() {
       console.error("Provider cleanup deferred"),
     );
   await cleanupReports();
+  await cleanupTemplateResources();
   const storage = new LocalStorage();
   await storage.expireOrphans(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   for (const row of await query(
