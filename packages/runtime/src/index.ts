@@ -418,6 +418,18 @@ export async function executeRun(
                   throw new Error(
                     "Agent finished without a successful required tool call",
                   );
+                const requiresPdf =
+                  (node.data.generatePdf &&
+                    node.data.requiredTool === "generate_pdf") ||
+                  templateNodes.some(
+                    (template) =>
+                      template.data.pdfTemplate?.toolName ===
+                      node.data.requiredTool,
+                  );
+                if (requiresPdf && !(await currentReport(runId, node.id)))
+                  throw new Error(
+                    "Agent finished without a current required PDF report",
+                  );
                 await complete(
                   node.id,
                   {

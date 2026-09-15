@@ -3,6 +3,7 @@ import sharp from "sharp";
 import {
   defaultPdfTemplate,
   TEMPLATE_PROFILE,
+  LEGACY_TEMPLATE_PROFILE,
 } from "../packages/contracts/src/pdf-templates";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -2279,6 +2280,89 @@ suite("PostgreSQL execution and recovery", () => {
         read.mockRestore();
         await Promise.allSettled([copying, concurrent]);
       }
+    },
+  );
+  it.each([LEGACY_TEMPLATE_PROFILE, TEMPLATE_PROFILE] as const)(
+    "executes immutable template publications using %s",
+    async (profile) => {
+      const source = await templateWorkflow();
+      const draft = structuredClone(source.draft);
+      draft.nodes.at(-1)!.data.rendererProfile = profile;
+      const versionId = randomUUID();
+      await persistence.query(
+        "INSERT INTO versions(id,workflow_id,number,snapshot) VALUES($1,$2,99,$3)",
+        [versionId, source.id, JSON.stringify({ workflow: draft, tools: [] })],
+      );
+      const run = await runFor(versionId);
+      await persistence.query("UPDATE emails SET raw=$2 WHERE id=$1", [
+        run.email.id,
+        JSON.stringify({ test: true }),
+      ]);
+      const compile = vi.fn(async (text: string, _profile: string) => ({
+        ...(await fakeCompile(text)),
+        profile,
+      }));
+      await runtime.executeRun(run.id, { compileReport: compile });
+      expect((await status(run.id)).status).toBe("succeeded");
+      expect(compile.mock.calls[0][1]).toBe(profile);
+    },
+  );
+  it.each(["missing", "failed-final-revision", "success"])(
+    "enforces a current required template PDF on %s completion",
+    async (scenario) => {
+      const source = await templateWorkflow();
+      source.draft.nodes = source.draft.nodes.filter(
+        (node) => node.type !== "send_email",
+      );
+      source.draft.edges = source.draft.edges.filter(
+        (edge) =>
+          source.draft.nodes.some((node) => node.id === edge.source) &&
+          source.draft.nodes.some((node) => node.id === edge.target),
+      );
+      const toolName = source.draft.nodes.at(-1)!.data.pdfTemplate!.toolName;
+      source.draft.nodes[2].data.requiredTool = toolName;
+      await runtime.saveDraft(source.id, source.draft);
+      const version = await runtime.publish(source.id);
+      const run = await runFor(version.id);
+      let turn = 0;
+      const provider = new MockProvider();
+      provider.infer = async () => {
+        turn++;
+        if (scenario === "missing" || turn > (scenario === "success" ? 1 : 2))
+          return { role: "model", parts: [{ text: "Finished" }] };
+        return {
+          role: "model",
+          parts: [
+            {
+              functionCall: {
+                id: `pdf-${turn}`,
+                name: toolName,
+                args: {
+                  title: turn === 1 ? "Valid" : "Broken",
+                  assessment: "Synthetic body",
+                },
+              },
+            },
+          ],
+        };
+      };
+      await runtime.executeRun(run.id, {
+        provider,
+        compileReport: async (source) =>
+          source.includes("Broken")
+            ? { ok: false, error: "Invalid synthetic revision" }
+            : { ...(await fakeCompile(source)), profile: TEMPLATE_PROFILE },
+      });
+      const result = await status(run.id);
+      expect(result.status).toBe(
+        scenario === "success" ? "succeeded" : "failed",
+      );
+      if (scenario === "missing")
+        expect(result.error).toContain(
+          "without a successful required tool call",
+        );
+      if (scenario === "failed-final-revision")
+        expect(result.error).toContain("without a current required PDF report");
     },
   );
   const templateCompile = async (source: string) => ({

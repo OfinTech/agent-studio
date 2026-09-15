@@ -1,7 +1,12 @@
 import { z } from "zod";
 import type { Workflow, WorkflowNode } from "./index";
 
-export const TEMPLATE_PROFILE = "tectonic-0.15.0-bundle33-template-v2";
+export const LEGACY_TEMPLATE_PROFILE = "tectonic-0.15.0-bundle33-template-v2";
+export const TEMPLATE_PROFILE = "tectonic-0.15.0-bundle33-template-v3";
+export const TEMPLATE_PROFILES = [
+  LEGACY_TEMPLATE_PROFILE,
+  TEMPLATE_PROFILE,
+] as const;
 export const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const IMAGES_MAX_BYTES = 20 * 1024 * 1024;
 export const imageResourceSchema = z.object({

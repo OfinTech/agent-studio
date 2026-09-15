@@ -20,6 +20,10 @@ COPY warmup-images.py /opt/
 RUN cp -a /opt/tex-cache /opt/tex-cache-template && \
     XDG_CACHE_HOME=/opt/tex-cache-template python3 /opt/warmup-images.py && \
     chmod -R a+rX /opt/tex-cache-template && rm /opt/warmup-images.py
+COPY warmup-diagrams.tex warmup-diagrams.py /opt/
+RUN cp -a /opt/tex-cache-template /opt/tex-cache-diagrams && \
+    XDG_CACHE_HOME=/opt/tex-cache-diagrams python3 /opt/warmup-diagrams.py && \
+    chmod -R a+rX /opt/tex-cache-diagrams && rm /opt/warmup-diagrams.*
 COPY server.py runner.py local-bridge.py /opt/
 USER 10001:10001
 EXPOSE 8080

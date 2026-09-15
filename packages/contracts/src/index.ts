@@ -483,7 +483,11 @@ export function validateWorkflow(
       if (
         !connectedOutcome(workflow, n.id) &&
         n.data.requiredTool &&
-        !attached.some((t) => t.name === n.data.requiredTool)
+        !attached.some((t) => t.name === n.data.requiredTool) &&
+        !attachedTemplates(workflow, n.id).some(
+          (t) => t.data.pdfTemplate?.toolName === n.data.requiredTool,
+        ) &&
+        !(n.data.generatePdf && n.data.requiredTool === "generate_pdf")
       )
         errors.push("Required success tool must be attached to the agent.");
     }

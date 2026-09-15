@@ -1,5 +1,5 @@
 import {
-  TEMPLATE_PROFILE,
+  TEMPLATE_PROFILES,
   renderTemplate,
   type ImageResource,
 } from "../../contracts/src/pdf-templates";
@@ -30,7 +30,7 @@ const input = z
   .strict();
 const compiled = z.object({
   ok: z.literal(true),
-  profile: z.enum([REPORT_PROFILE, TEMPLATE_PROFILE]),
+  profile: z.enum([REPORT_PROFILE, ...TEMPLATE_PROFILES]),
   pdf: z.string().max(13981016),
   pageCount: z.number().int().min(1).max(20),
   warnings: z.array(z.string().max(500)).max(10),
@@ -182,7 +182,9 @@ export async function generateReport(
             templateError ??
             "Provide nonempty LaTeX, at most 128 KiB UTF-8, using only the required parameters.",
         }
-      : profile !== (templateNode ? TEMPLATE_PROFILE : REPORT_PROFILE)
+      : !(templateNode
+            ? TEMPLATE_PROFILES.some((supported) => profile === supported)
+            : profile === REPORT_PROFILE)
         ? {
             ok: false,
             error:

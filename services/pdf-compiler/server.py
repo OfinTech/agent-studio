@@ -18,7 +18,13 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROFILE = "tectonic-0.15.0-bundle33-report-v1"
-TEMPLATE_PROFILE = "tectonic-0.15.0-bundle33-template-v2"
+LEGACY_TEMPLATE_PROFILE = "tectonic-0.15.0-bundle33-template-v2"
+TEMPLATE_PROFILE = "tectonic-0.15.0-bundle33-template-v3"
+CACHES = {
+    PROFILE: "/opt/tex-cache",
+    LEGACY_TEMPLATE_PROFILE: "/opt/tex-cache-template",
+    TEMPLATE_PROFILE: "/opt/tex-cache-diagrams",
+}
 Image.MAX_IMAGE_PIXELS = 16000000
 MAX_PDF = 10 * 1024 * 1024
 JOBS = Path("/tmp/jobs")
@@ -77,7 +83,7 @@ def compile_report(source, connection=None, profile=PROFILE, resources=None):
                 process = subprocess.Popen(["python3", "-B", "/opt/runner.py", *args], cwd=work, stdout=log, stderr=subprocess.STDOUT,
                                            start_new_session=True,
                                            env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": directory,
-                                                "XDG_CACHE_HOME": "/opt/tex-cache-template" if profile == TEMPLATE_PROFILE else "/opt/tex-cache", "TECTONIC_UNTRUSTED_MODE": "1",
+                                                "XDG_CACHE_HOME": CACHES[profile], "TECTONIC_UNTRUSTED_MODE": "1",
                                                 "SOURCE_DATE_EPOCH": "1788825600"})
                 try:
                     while process.poll() is None:
@@ -138,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self):
-        self.reply(200 if self.path == "/health" else 404, {"profile": PROFILE, "profiles": [PROFILE, TEMPLATE_PROFILE]})
+        self.reply(200 if self.path == "/health" else 404, {"profile": PROFILE, "profiles": list(CACHES)})
 
     def do_POST(self):
         if self.path != "/compile":
@@ -151,7 +157,7 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= 29000000:
                 return self.reply(413, {"ok": False, "error": "Request too large"})
             data = json.loads(self.rfile.read(length))
-            if data.get("profile") not in (PROFILE, TEMPLATE_PROFILE):
+            if data.get("profile") not in CACHES:
                 return self.reply(400, {"ok": False, "error": "Unsupported renderer profile"})
             self.reply(200, compile_report(data.get("source"), self.connection, data["profile"], data.get("resources", [])))
         except (ValueError, OSError):

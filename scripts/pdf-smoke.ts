@@ -168,3 +168,60 @@ assert(
 console.log(
   "PASS offline template logos, raw Agent sections, missing/corrupt resources and filename isolation",
 );
+
+// Both published template profiles remain usable with their original resources.
+const { LEGACY_TEMPLATE_PROFILE } =
+  await import("../packages/contracts/src/pdf-templates");
+const legacyImageReport = await compileReport(
+  templateSource,
+  LEGACY_TEMPLATE_PROFILE,
+  signal(),
+  resources,
+);
+assert(legacyImageReport.ok, JSON.stringify(legacyImageReport));
+assert.equal(legacyImageReport.profile, LEGACY_TEMPLATE_PROFILE);
+const { readFile } = await import("node:fs/promises");
+const diagrams = await readFile(
+  "services/pdf-compiler/warmup-diagrams.tex",
+  "utf8",
+);
+const diagramReport = await compileReport(diagrams, TEMPLATE_PROFILE, signal());
+assert(diagramReport.ok, JSON.stringify(diagramReport));
+assert(diagramReport.text.includes("Synthetic graphs"));
+assert(
+  !(await compileReport(diagrams, LEGACY_TEMPLATE_PROFILE, signal())).ok,
+  "New packages must not change the v2 cache",
+);
+assert(
+  !(await compileReport(diagrams, REPORT_PROFILE, signal())).ok,
+  "New packages must not change the v1 cache",
+);
+const logo = await readFile("reports/ofintech/ofintech-logo.png");
+const branded = renderTemplate(
+  {
+    ...defaultPdfTemplate,
+    source: await readFile("reports/ofintech/report.tex", "utf8"),
+  },
+  JSON.parse(await readFile("reports/ofintech/sample-parameters.json", "utf8")),
+);
+const brandedReport = await compileReport(branded, TEMPLATE_PROFILE, signal(), [
+  {
+    id: "11111111-1111-4111-8111-111111111111",
+    filename: "ofintech-logo.png",
+    mimeType: "image/png",
+    checksum: reportChecksum(logo),
+    size: logo.length,
+    content: logo.toString("base64"),
+  },
+]);
+assert(brandedReport.ok, JSON.stringify(brandedReport));
+assert(brandedReport.pageCount >= 2);
+assert(brandedReport.text.includes("OFINTECH"));
+assert(brandedReport.text.includes("Sources and limitations"));
+assert(
+  !brandedReport.warnings.some((warning) => /overfull/i.test(warning)),
+  JSON.stringify(brandedReport.warnings),
+);
+console.log(
+  "PASS v1/v2 compatibility, isolated v3 diagrams/plots/tables and branded Ofintech multipage layout",
+);

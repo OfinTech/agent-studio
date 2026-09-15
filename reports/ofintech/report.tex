@@ -1,0 +1,59 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[left=22mm,right=22mm,top=28mm,bottom=24mm,headheight=28pt,headsep=10mm]{geometry}
+\usepackage[table]{xcolor}
+\usepackage{graphicx,amsmath,amssymb,booktabs,longtable,array,tabularx,multirow,siunitx}
+\usepackage{fancyhdr,titlesec,enumitem,caption,float,lastpage}
+\usepackage{tikz,pgfplots}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric,matrix,trees,patterns,decorations.pathreplacing}
+\usepgfplotslibrary{fillbetween,statistics,groupplots}
+\pgfplotsset{compat=1.18}
+\usepackage{hyperref}
+\definecolor{OfinNavy}{HTML}{142366}
+\definecolor{OfinBlue}{HTML}{4566B0}
+\definecolor{OfinGray}{HTML}{536078}
+\definecolor{OfinTint}{HTML}{F0F3FA}
+\definecolor{OfinRule}{HTML}{CCD4E6}
+\hypersetup{colorlinks=true,linkcolor=OfinNavy,urlcolor=OfinBlue,pdfauthor={Ofintech},pdftitle={<<title>>}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.25}
+\setlength{\tabcolsep}{6pt}
+\setlist{leftmargin=*,itemsep=3pt,topsep=4pt}
+\captionsetup{font=small,labelfont={bf,color=OfinNavy},skip=6pt}
+\titleformat{\section}{\Large\sffamily\bfseries\color{OfinNavy}}{\thesection}{.65em}{}
+\titleformat{\subsection}{\large\sffamily\bfseries\color{OfinNavy}}{\thesubsection}{.65em}{}
+\titlespacing*{\section}{0pt}{16pt}{6pt}
+\titlespacing*{\subsection}{0pt}{10pt}{4pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\includegraphics[width=38mm]{assets/ofintech-logo.png}}
+\fancyhead[R]{\small\sffamily\color{OfinGray}REPORTS}
+\fancyfoot[L]{\small\sffamily\color{OfinGray}OFINTECH\enspace|\enspace\href{https://ofintech.co/}{ofintech.co}}
+\fancyfoot[R]{\small\sffamily\color{OfinGray}\thepage\ / \pageref{LastPage}}
+\renewcommand{\headrulewidth}{.4pt}
+\renewcommand{\footrulewidth}{.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{OfinRule}\leaders\hrule height\headrulewidth\hfill}}
+\renewcommand{\footrule}{\hbox to\headwidth{\color{OfinRule}\leaders\hrule height\footrulewidth\hfill}}
+\tikzset{
+  ofinbox/.style={draw=OfinNavy,fill=OfinTint,rounded corners=2pt,align=center,text width=30mm,minimum height=11mm,font=\small\sffamily,inner sep=4pt},
+  ofinflow/.style={-{Stealth},draw=OfinNavy,thick}
+}
+\pgfplotsset{every axis/.append style={
+  width=.88\linewidth,height=60mm,
+  axis line style={OfinGray},tick label style={font=\small},label style={font=\small\sffamily},
+  legend style={font=\small,draw=none},grid=major,grid style={OfinRule,dotted},
+  cycle list={{OfinNavy,mark=*},{OfinBlue,mark=square*},{OfinGray,mark=triangle*}}
+}}
+\begin{document}
+{\huge\sffamily\bfseries\color{OfinNavy}<<title>>\par}
+{\large\sffamily\color{OfinGray}<<subtitle>>\par}
+{\small\sffamily\color{OfinGray}<<report_date>>\par}
+\vspace{3mm}
+{\color{OfinNavy}\hrule height 1.2pt}
+\section*{Executive summary}
+<<executive_summary>>
+<<body>>
+\section*{Sources and limitations}
+<<sources>>
+\end{document}

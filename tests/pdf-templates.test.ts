@@ -263,3 +263,32 @@ it("decodes actual PNG/JPEG pixels and rejects corrupt, unsupported and excessiv
     ).success,
   ).toBe(false);
 });
+
+it("allows an attached PDF template as the required success tool without accepting unattached tools", () => {
+  const workflow = structuredClone(receiptWorkflow);
+  workflow.nodes.push({
+    id: "branded",
+    type: "pdf_template",
+    position: { x: 0, y: 0 },
+    data: {
+      label: "Branded report",
+      pdfTemplate: structuredClone(defaultPdfTemplate),
+    },
+  });
+  workflow.edges.push({
+    id: "branded-edge",
+    kind: "tool",
+    source: "branded",
+    target: "agent",
+  });
+  workflow.nodes[2].data.requiredTool = defaultPdfTemplate.toolName;
+  expect(validateWorkflow(workflow, [receiptTool])).toEqual([]);
+  workflow.edges = workflow.edges.filter((edge) => edge.id !== "branded-edge");
+  expect(validateWorkflow(workflow, [receiptTool])).toContain(
+    "Required success tool must be attached to the agent.",
+  );
+  workflow.nodes = workflow.nodes.filter((node) => node.id !== "branded");
+  workflow.nodes[2].data.generatePdf = true;
+  workflow.nodes[2].data.requiredTool = "generate_pdf";
+  expect(validateWorkflow(workflow, [receiptTool])).toEqual([]);
+});

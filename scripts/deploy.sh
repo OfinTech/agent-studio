@@ -32,7 +32,7 @@ rsync -az --delete --exclude-from="$staged/.dockerignore" --exclude=.env --exclu
 compose=(docker compose -p agent-platform -f docker-compose.prod.yml)
 "${compose[@]}" build pdf-compiler web worker migrate
 "${compose[@]}" up -d --no-deps --wait pdf-compiler
-"${compose[@]}" exec -T pdf-compiler python3 -c 'import json,urllib.request; data=json.load(urllib.request.urlopen("http://localhost:8080/health")); assert "tectonic-0.15.0-bundle33-report-v1" in data["profiles"]; assert "tectonic-0.15.0-bundle33-template-v2" in data["profiles"]'
+"${compose[@]}" exec -T pdf-compiler python3 -c 'import json,urllib.request; data=json.load(urllib.request.urlopen("http://localhost:8080/health")); assert "tectonic-0.15.0-bundle33-report-v1" in data["profiles"]; assert "tectonic-0.15.0-bundle33-template-v2" in data["profiles"]; assert "tectonic-0.15.0-bundle33-template-v3" in data["profiles"]'
 "${compose[@]}" run --rm --no-deps migrate
 "${compose[@]}" up -d --no-deps web worker
 healthy=false
