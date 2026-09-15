@@ -1,4 +1,5 @@
 "use client";
+import { reportSources } from "../../../packages/contracts/src/reports";
 import {
   Button,
   Code,
@@ -279,6 +280,41 @@ function EmailSettings({
         }
       />
       <TextInput label="To" readOnly value="Original sender" />
+      <NativeSelect
+        label="Attach PDF report from"
+        value={node.data.reportSourceNodeId ?? ""}
+        data={[
+          { value: "", label: "None" },
+          ...reportSources(draft, node.id).map((n) => ({
+            value: n.id,
+            label: n.data.label,
+          })),
+          ...(node.data.reportSourceNodeId &&
+          !reportSources(draft, node.id).some(
+            (n) => n.id === node.data.reportSourceNodeId,
+          )
+            ? [
+                {
+                  value: node.data.reportSourceNodeId,
+                  label: "Unavailable Agent — choose another source",
+                },
+              ]
+            : []),
+        ]}
+        error={
+          node.data.reportSourceNodeId &&
+          !reportSources(draft, node.id).some(
+            (n) => n.id === node.data.reportSourceNodeId,
+          )
+            ? "Select a PDF-enabled Agent earlier on this path."
+            : undefined
+        }
+        onChange={(event) =>
+          patchNode({
+            reportSourceNodeId: event.currentTarget.value || undefined,
+          })
+        }
+      />
       <TextInput
         label="Subject template"
         value={node.data.subjectTemplate ?? ""}

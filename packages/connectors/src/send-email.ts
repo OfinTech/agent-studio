@@ -1,3 +1,4 @@
+import { ReportStorage } from "./reports";
 import { z } from "zod";
 import {
   renderPrompt,
@@ -89,6 +90,28 @@ export async function sendEmail(
       ok: false,
       error: "Email sending requires a Resend API key in Settings",
     };
+  const { attachments, ...fields } = message;
+  let payload;
+  try {
+    payload = {
+      ...fields,
+      ...(attachments?.length
+        ? {
+            attachments: await Promise.all(
+              attachments.map(async (report) => ({
+                filename: report.filename,
+                content: (await new ReportStorage().read(report)).toString(
+                  "base64",
+                ),
+                content_type: "application/pdf",
+              })),
+            ),
+          }
+        : {}),
+    };
+  } catch {
+    return { ok: false, error: "Email report file is missing or invalid" };
+  }
   try {
     const response = await boundedRequest(
       new URL("https://api.resend.com/emails"),
@@ -99,7 +122,7 @@ export async function sendEmail(
           "Content-Type": "application/json",
           "Idempotency-Key": idempotencyKey,
         },
-        body: JSON.stringify(message),
+        body: JSON.stringify(payload),
         maxBytes: 65536,
         timeoutMs: 30000,
         signal,

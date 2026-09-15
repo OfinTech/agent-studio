@@ -1,3 +1,5 @@
+import { REPORT_PROFILE } from "../../contracts/src/reports";
+import { ReportStorage } from "../../connectors/src/reports";
 import { randomUUID } from "node:crypto";
 import { PgBoss } from "pg-boss";
 import {
@@ -56,6 +58,9 @@ export async function publish(id: string) {
     ]);
     if (!row) throw new ConfigurationError("Workflow not found");
     const workflow = workflowSchema.parse(row.draft);
+    for (const node of workflow.nodes)
+      if (node.type === "agent" && node.data.generatePdf)
+        node.data.rendererProfile = REPORT_PROFILE;
     const ids = workflow.nodes
       .filter((n) => n.type === "tool" || n.type === "action")
       .map((n) => n.data.toolId);
@@ -185,7 +190,7 @@ export async function saveDraft(id: string, draft: Workflow) {
   );
 }
 export async function deleteWorkflow(id: string) {
-  await transaction(async (client) => {
+  const files = await transaction(async (client) => {
     const { rows: runs } = await client.query(
       "SELECT r.id,r.status FROM runs r JOIN versions v ON v.id=r.version_id WHERE v.workflow_id=$1",
       [id],
@@ -195,6 +200,18 @@ export async function deleteWorkflow(id: string) {
         "Wait for the workflow's active runs to finish before deleting it",
       );
     const ids = runs.map((r) => r.id);
+    const { rows: files } = await client.query(
+      "SELECT id FROM generated_reports WHERE run_id=ANY($1::text[])",
+      [ids],
+    );
+    await client.query(
+      "DELETE FROM report_attempts WHERE run_id=ANY($1::text[])",
+      [ids],
+    );
+    await client.query(
+      "DELETE FROM generated_reports WHERE run_id=ANY($1::text[])",
+      [ids],
+    );
     for (const table of [
       "email_sends",
       "provider_files",
@@ -213,5 +230,11 @@ export async function deleteWorkflow(id: string) {
       [id],
     );
     if (!rowCount) throw new ConfigurationError("Workflow not found");
+    return files;
   });
+  // A failed unlink is retried by orphan maintenance; never delete bytes before commit.
+  for (const file of files)
+    await new ReportStorage()
+      .delete(file.id)
+      .catch(() => console.error("Report cleanup deferred"));
 }

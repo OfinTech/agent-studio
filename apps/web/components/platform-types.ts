@@ -1,3 +1,4 @@
+import type { ReportReference } from "../../../packages/contracts/src/reports";
 import type {
   Workflow,
   ToolDefinition,
@@ -22,11 +23,31 @@ export type Run = {
   error?: string;
   snapshot?: { workflow: Workflow };
   steps?: { id: string; node_id: string; status: string; output: unknown }[];
+  reports?: {
+    id: string;
+    node_id: string;
+    attempt_order: number;
+    status: string;
+    result: unknown;
+    report_id: string | null;
+    page_count: number | null;
+    size: number | null;
+    extracted_text: string | null;
+    text_truncated: boolean | null;
+    expired_at: string | null;
+    current: boolean;
+  }[];
   emailSends?: {
     node_id: string;
     mode: "preview" | "live";
     status: string;
-    message: { from: string; to: string[]; subject: string; text: string };
+    message: {
+      from: string;
+      to: string[];
+      subject: string;
+      text: string;
+      attachments?: ReportReference[];
+    };
     provider_email_id: string | null;
     error: string | null;
   }[];

@@ -24,7 +24,9 @@
     "test:live:outcomes": "tsx --env-file-if-exists=.env scripts/live-outcomes.ts",
     "test:live:email": "tsx --env-file-if-exists=.env scripts/live-email.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:pdf": "tsx scripts/pdf-smoke.ts",
+    "test:pdf:isolation": "tsx scripts/pdf-isolation.ts"
   },
   "dependencies": {
     "@google/genai": "^2.21.0",

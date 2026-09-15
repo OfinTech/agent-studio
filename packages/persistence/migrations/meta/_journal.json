@@ -50,6 +50,13 @@
       "when": 1789068039220,
       "tag": "0006_versions_deletable",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789400000000,
+      "tag": "0007_pdf_reports",
+      "breakpoints": true
     }
   ]
 }

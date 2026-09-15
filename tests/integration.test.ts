@@ -1475,4 +1475,526 @@ suite("PostgreSQL execution and recovery", () => {
       log.mockRestore();
     }
   });
+  async function pdfWorkflow() {
+    return workflow((draft) => {
+      draft.nodes[2].data.generatePdf = true;
+      draft.nodes[2].data.requiredTool = undefined;
+      draft.nodes.push({
+        id: "reply",
+        type: "send_email",
+        position: { x: 1200, y: 0 },
+        data: {
+          label: "Reply",
+          bodyTemplate: "{{steps.agent.text}}",
+          reportSourceNodeId: "agent",
+        },
+      });
+      draft.edges.push({
+        id: "pdf-reply",
+        source: "agent",
+        target: "reply",
+        kind: "execution",
+      });
+    });
+  }
+  const fakeCompile = vi.fn(async (_source: string) => ({
+    ok: true as const,
+    profile: "tectonic-0.15.0-bundle33-report-v1" as const,
+    pdf: Buffer.from("%PDF-1.4\nSynthetic database fixture").toString("base64"),
+    pageCount: 2,
+    warnings: [],
+    text: "Synthetic report ".repeat(200),
+    textTruncated: false,
+  }));
+  it("pins the renderer, commits report output without Outcome, freezes preview metadata and never dispatches email", async () => {
+    const w = await pdfWorkflow(),
+      run = await runFor(w.version.id);
+    await persistence.query("UPDATE emails SET raw=$2 WHERE id=$1", [
+      run.email.id,
+      JSON.stringify({ test: true }),
+    ]);
+    const dispatch = vi.fn();
+    await runtime.executeRun(run.id, {
+      compileReport: fakeCompile,
+      sendEmail: dispatch,
+    });
+    expect((await status(run.id)).status).toBe("succeeded");
+    expect(dispatch).not.toHaveBeenCalled();
+    const [step] = await persistence.query(
+      "SELECT output FROM steps WHERE run_id=$1 AND node_id='agent'",
+      [run.id],
+    );
+    const [send] = await persistence.query(
+      "SELECT * FROM email_sends WHERE run_id=$1",
+      [run.id],
+    );
+    expect(step.output.report).toMatchObject({
+      nodeId: "agent",
+      filename: "report.pdf",
+      pageCount: 2,
+    });
+    expect(send.message.attachments).toEqual([step.output.report]);
+    expect(JSON.stringify(send)).not.toContain("base64");
+    const [attempt] = await persistence.query(
+      "SELECT * FROM report_attempts WHERE run_id=$1",
+      [run.id],
+    );
+    expect(attempt.renderer_profile).toBe("tectonic-0.15.0-bundle33-report-v1");
+    expect(attempt.result.data.textPreview.length).toBe(2000);
+    expect(attempt.result.data.textTruncated).toBe(true);
+    expect(attempt.result.data.pdf).toBeUndefined();
+  });
+  it("replays calls, invalidates failed revisions, reuses successful source and persists distinct attempt limits", async () => {
+    const { generateReport, currentReport } =
+      await import("../packages/runtime/src/report-execution");
+    const w = await pdfWorkflow(),
+      run = await runFor(w.version.id);
+    const node = {
+      ...w.draft.nodes[2],
+      data: {
+        ...w.draft.nodes[2].data,
+        rendererProfile: "tectonic-0.15.0-bundle33-report-v1",
+      },
+    };
+    const compile = vi.fn(async (source: string) =>
+      source === "bad"
+        ? { ok: false as const, error: "Undefined command" }
+        : fakeCompile(source),
+    );
+    const call = (id: string, source: string) =>
+      generateReport(
+        run.id,
+        node,
+        run.id + id,
+        { source },
+        AbortSignal.timeout(10000),
+        compile,
+      );
+    const first = await call("a", "good");
+    expect(await call("a", "good")).toEqual(first);
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(await currentReport(run.id, node.id)).toBeDefined();
+    expect((await call("b", "bad")).ok).toBe(false);
+    expect(await currentReport(run.id, node.id)).toBeUndefined();
+    expect(await call("c", "good")).toEqual(first);
+    expect(compile).toHaveBeenCalledTimes(2);
+    await call("d", "third");
+    expect((await call("e", "fourth")).error).toContain("exhausted");
+    expect(await currentReport(run.id, node.id)).toBeUndefined();
+    expect(await call("f", "good")).toEqual(first);
+    expect(compile).toHaveBeenCalledTimes(3);
+  });
+  it("recovers interrupted compilation and storage without API-write review", async () => {
+    const { ReportStorage } =
+      await import("../packages/connectors/src/reports");
+    for (const stage of ["compile", "storage"] as const) {
+      const w = await pdfWorkflow(),
+        run = await runFor(w.version.id);
+      const compile = vi.fn(fakeCompile);
+      if (stage === "compile")
+        compile.mockRejectedValueOnce(
+          new Error("synthetic worker interruption"),
+        );
+      const originalPut = ReportStorage.prototype.put;
+      const put =
+        stage === "storage"
+          ? vi
+              .spyOn(ReportStorage.prototype, "put")
+              .mockImplementationOnce(async function (
+                this: InstanceType<typeof ReportStorage>,
+                id,
+                bytes,
+              ) {
+                await originalPut.call(this, id, bytes);
+                throw new Error("synthetic disk interruption after fsync");
+              })
+          : undefined;
+      try {
+        await expect(
+          runtime.executeRun(run.id, { compileReport: compile }),
+        ).rejects.toThrow("PDF generation interrupted");
+        expect((await status(run.id)).status).toBe("queued");
+        const [attempt] = await persistence.query(
+          "SELECT * FROM report_attempts WHERE run_id=$1",
+          [run.id],
+        );
+        expect(attempt.status).toBe("running");
+      } finally {
+        put?.mockRestore();
+      }
+      await runtime.executeRun(run.id, {
+        compileReport: compile,
+        sendEmail: async () => ({
+          ok: true,
+          providerEmailId: "synthetic-accepted",
+        }),
+      });
+      expect((await status(run.id)).status).toBe("succeeded");
+      expect(
+        await persistence.query(
+          "SELECT * FROM report_attempts WHERE run_id=$1",
+          [run.id],
+        ),
+      ).toHaveLength(1);
+    }
+  });
+  it("restores a completed report call after checkpoint interruption and freezes attachments across email acceptance recovery", async () => {
+    const { RetryError } =
+      await import("../packages/runtime/src/run-lifecycle");
+    const w = await pdfWorkflow(),
+      run = await runFor(w.version.id);
+    const compile = vi.fn(fakeCompile);
+    let interrupted = false;
+    await expect(
+      runtime.executeRun(run.id, {
+        compileReport: compile,
+        afterCheckpoint: async (state) => {
+          if (!interrupted && state.nodes.agent?.turn === 1) {
+            interrupted = true;
+            throw new RetryError("synthetic checkpoint interruption");
+          }
+        },
+      }),
+    ).rejects.toThrow();
+    const send = vi.fn(async () => ({
+      ok: true as const,
+      providerEmailId: "accepted",
+    }));
+    await expect(
+      runtime.executeRun(run.id, {
+        compileReport: compile,
+        sendEmail: send,
+        afterEmailAccepted: async () => {
+          throw new RetryError("Email synthetic interruption");
+        },
+      }),
+    ).rejects.toThrow();
+    await runtime.executeRun(run.id, {
+      compileReport: compile,
+      sendEmail: send,
+    });
+    expect((await status(run.id)).status).toBe("succeeded");
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1].slice(0, 2)).toEqual(
+      send.mock.calls[0].slice(0, 2),
+    );
+  });
+  it("rejects foreign, expired, corrupt and missing report files before dispatch", async () => {
+    const { generateReport, currentReport, validateReport } =
+      await import("../packages/runtime/src/report-execution");
+    const { ReportStorage } =
+      await import("../packages/connectors/src/reports");
+    const { writeFile } = await import("node:fs/promises");
+    const w = await pdfWorkflow(),
+      run = await runFor(w.version.id);
+    const node = {
+      ...w.draft.nodes[2],
+      data: {
+        ...w.draft.nodes[2].data,
+        rendererProfile: "tectonic-0.15.0-bundle33-report-v1",
+      },
+    };
+    await generateReport(
+      run.id,
+      node,
+      run.id + "a",
+      { source: "good" },
+      AbortSignal.timeout(10000),
+      fakeCompile,
+    );
+    const reference = (await currentReport(run.id, node.id))!;
+    await expect(validateReport("another-run", reference)).rejects.toThrow(
+      "another run",
+    );
+    await expect(
+      validateReport(run.id, { ...reference, nodeId: "other-agent" }),
+    ).rejects.toThrow("another run");
+    await persistence.query(
+      "UPDATE runs SET finished_at=now()-interval '8 days' WHERE id=$1",
+      [run.id],
+    );
+    await expect(validateReport(run.id, reference)).rejects.toThrow("expired");
+    await persistence.query("UPDATE runs SET finished_at=NULL WHERE id=$1", [
+      run.id,
+    ]);
+    await writeFile(
+      new ReportStorage().path(reference.reportId),
+      Buffer.alloc(reference.size),
+    );
+    await expect(validateReport(run.id, reference)).rejects.toThrow("checksum");
+    await new ReportStorage().delete(reference.reportId);
+    await expect(validateReport(run.id, reference)).rejects.toThrow("missing");
+    const send = vi.fn();
+    await runtime.executeRun(run.id, {
+      compileReport: fakeCompile,
+      sendEmail: send,
+      afterEmailPrepared: async () => {
+        const [record] = await persistence.query(
+          "SELECT * FROM email_sends WHERE run_id=$1",
+          [run.id],
+        );
+        await new ReportStorage().delete(
+          record.message.attachments[0].reportId,
+        );
+      },
+    });
+    expect((await status(run.id)).status).toBe("failed");
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("expires terminal reports after seven days, retains active reports, and cleans workflow deletion", async () => {
+    const { generateReport, currentReport, cleanupReports } =
+      await import("../packages/runtime/src/report-execution");
+    const { ReportStorage } =
+      await import("../packages/connectors/src/reports");
+    for (const terminal of [false, true]) {
+      const w = await pdfWorkflow(),
+        run = await runFor(w.version.id);
+      const node = {
+        ...w.draft.nodes[2],
+        data: {
+          ...w.draft.nodes[2].data,
+          rendererProfile: "tectonic-0.15.0-bundle33-report-v1",
+        },
+      };
+      await generateReport(
+        run.id,
+        node,
+        run.id + "a",
+        { source: "good" },
+        AbortSignal.timeout(10000),
+        fakeCompile,
+      );
+      const reference = (await currentReport(run.id, node.id))!;
+      await persistence.query(
+        "UPDATE generated_reports SET created_at=now()-interval '10 days' WHERE run_id=$1",
+        [run.id],
+      );
+      if (terminal)
+        await persistence.query(
+          "UPDATE runs SET status='succeeded',finished_at=now()-interval '8 days' WHERE id=$1",
+          [run.id],
+        );
+      await cleanupReports();
+      const [file] = await persistence.query(
+        "SELECT * FROM generated_reports WHERE run_id=$1",
+        [run.id],
+      );
+      expect(file.expired_at !== null).toBe(terminal);
+      if (terminal) {
+        expect(file.extracted_text).toBeNull();
+        await expect(new ReportStorage().read(reference)).rejects.toThrow();
+      } else expect(await new ReportStorage().read(reference)).toBeDefined();
+      await persistence.query(
+        "UPDATE runs SET status='succeeded' WHERE id=$1",
+        [run.id],
+      );
+      await runtime.deleteWorkflow(w.id);
+      await expect(new ReportStorage().read(reference)).rejects.toThrow();
+      expect(
+        await persistence.query(
+          "SELECT * FROM report_attempts WHERE run_id=$1",
+          [run.id],
+        ),
+      ).toEqual([]);
+    }
+  });
+  it.each(["success", "failure", "review"])(
+    "keeps explicit %s Outcome selection independent of PDF compilation",
+    async (selected) => {
+      const w = await emailWorkflow();
+      w.draft.nodes.find((n) => n.id === "agent")!.data.generatePdf = true;
+      w.draft.nodes.find(
+        (n) => n.id === "success-email",
+      )!.data.reportSourceNodeId = "agent";
+      await runtime.saveDraft(w.id, w.draft);
+      const version = await runtime.publish(w.id);
+      const run = await runFor(version.id);
+      const provider = new ReportProvider([
+        {
+          role: "model",
+          parts: [
+            {
+              functionCall: {
+                id: "pdf",
+                name: "generate_pdf",
+                args: { source: "synthetic" },
+              },
+            },
+          ],
+        },
+        report(selected),
+      ]);
+      const send = vi.fn(async () => ({
+        ok: true as const,
+        providerEmailId: "accepted",
+      }));
+      await runtime.executeRun(run.id, {
+        provider,
+        compileReport:
+          selected === "success"
+            ? fakeCompile
+            : async () => ({
+                ok: false,
+                error: "Synthetic compiler diagnostics",
+              }),
+        sendEmail: send,
+      });
+      expect((await status(run.id)).status).toBe("succeeded");
+      const [step] = await persistence.query(
+        "SELECT output FROM steps WHERE run_id=$1 AND node_id='agent'",
+        [run.id],
+      );
+      expect(step.output.outcome.state).toBe(selected);
+      expect(step.output.report !== undefined).toBe(selected === "success");
+      const [email] = await persistence.query(
+        "SELECT * FROM email_sends WHERE run_id=$1",
+        [run.id],
+      );
+      expect(email.node_id).toBe(selected + "-email");
+      expect(email.message.attachments?.length ?? 0).toBe(
+        selected === "success" ? 1 : 0,
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(
+        provider.seen[1].at(-1)?.parts?.[0].functionResponse?.response,
+      ).toMatchObject({ ok: selected === "success" });
+    },
+  );
+  it("recovers a failed report metadata commit without acknowledging success or repeating an external write", async () => {
+    const w = await pdfWorkflow(),
+      run = await runFor(w.version.id);
+    await persistence.query(
+      "CREATE FUNCTION reject_pdf_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic report metadata failure'; END $$",
+    );
+    await persistence.query(
+      "CREATE TRIGGER reject_pdf_commit BEFORE INSERT ON generated_reports FOR EACH ROW EXECUTE FUNCTION reject_pdf_commit()",
+    );
+    const compile = vi.fn(fakeCompile),
+      send = vi.fn(async () => ({
+        ok: true as const,
+        providerEmailId: "accepted",
+      }));
+    try {
+      await expect(
+        runtime.executeRun(run.id, { compileReport: compile, sendEmail: send }),
+      ).rejects.toThrow("PDF generation interrupted");
+      expect((await status(run.id)).status).toBe("queued");
+      expect(send).not.toHaveBeenCalled();
+      expect(
+        await persistence.query(
+          "SELECT * FROM generated_reports WHERE run_id=$1",
+          [run.id],
+        ),
+      ).toEqual([]);
+      expect(
+        (
+          await persistence.query(
+            "SELECT * FROM report_attempts WHERE run_id=$1",
+            [run.id],
+          )
+        )[0],
+      ).toMatchObject({ status: "running", result: null });
+    } finally {
+      await persistence.query(
+        "DROP TRIGGER reject_pdf_commit ON generated_reports",
+      );
+      await persistence.query("DROP FUNCTION reject_pdf_commit()");
+    }
+    await runtime.executeRun(run.id, {
+      compileReport: compile,
+      sendEmail: send,
+    });
+    expect((await status(run.id)).status).toBe("succeeded");
+    expect(
+      await persistence.query(
+        "SELECT * FROM generated_reports WHERE run_id=$1",
+        [run.id],
+      ),
+    ).toHaveLength(1);
+    expect(
+      await persistence.query("SELECT * FROM report_attempts WHERE run_id=$1", [
+        run.id,
+      ]),
+    ).toHaveLength(1);
+  });
+  it("finalizes interrupted report generation without API write review at the run deadline", async () => {
+    const { generateReport, cleanupReports } =
+      await import("../packages/runtime/src/report-execution");
+    const w = await pdfWorkflow(),
+      run = await runFor(w.version.id);
+    const node = {
+      ...w.draft.nodes[2],
+      data: {
+        ...w.draft.nodes[2].data,
+        rendererProfile: "tectonic-0.15.0-bundle33-report-v1",
+      },
+    };
+    await expect(
+      generateReport(
+        run.id,
+        node,
+        run.id + "pdf",
+        { source: "synthetic" },
+        AbortSignal.timeout(10000),
+        async () => {
+          throw new Error("interrupted");
+        },
+      ),
+    ).rejects.toThrow();
+    await persistence.query(
+      "UPDATE runs SET status='running',started_at=now()-interval '7 minutes' WHERE id=$1",
+      [run.id],
+    );
+    await runtime.maintenance();
+    expect((await status(run.id)).status).toBe("failed");
+    await cleanupReports();
+    expect(
+      (
+        await persistence.query(
+          "SELECT * FROM report_attempts WHERE run_id=$1",
+          [run.id],
+        )
+      )[0].status,
+    ).toBe("failed");
+  });
+  it("expires extracted text from both report records and checkpoint tool previews", async () => {
+    const { cleanupReports } =
+      await import("../packages/runtime/src/report-execution");
+    const w = await pdfWorkflow(),
+      run = await runFor(w.version.id);
+    await runtime.executeRun(run.id, {
+      compileReport: fakeCompile,
+      sendEmail: async () => ({ ok: true, providerEmailId: "accepted" }),
+    });
+    expect((await status(run.id)).status).toBe("succeeded");
+    const [before] = await persistence.query(
+      "SELECT state FROM checkpoints WHERE run_id=$1",
+      [run.id],
+    );
+    expect(JSON.stringify(before.state)).toContain('"textPreview"');
+    await persistence.query(
+      "UPDATE runs SET finished_at=now()-interval '8 days' WHERE id=$1",
+      [run.id],
+    );
+    await cleanupReports();
+    const [after] = await persistence.query(
+      "SELECT state FROM checkpoints WHERE run_id=$1",
+      [run.id],
+    );
+    expect(JSON.stringify(after.state)).not.toContain('"textPreview"');
+    const [attempt] = await persistence.query(
+      "SELECT * FROM report_attempts WHERE run_id=$1",
+      [run.id],
+    );
+    expect(attempt.result.data.textPreview).toBeUndefined();
+    expect(attempt.result.data.pageCount).toBe(2);
+    const [file] = await persistence.query(
+      "SELECT * FROM generated_reports WHERE run_id=$1",
+      [run.id],
+    );
+    expect(file.extracted_text).toBeNull();
+    expect(file.expired_at).not.toBeNull();
+    expect(file.checksum).toBeDefined();
+  });
 });

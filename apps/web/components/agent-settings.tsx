@@ -1,6 +1,8 @@
 "use client";
+import { pdfInstructions } from "../../../packages/contracts/src/reports";
 import {
   Button,
+  Checkbox,
   Code,
   NativeSelect,
   NumberInput,
@@ -25,6 +27,17 @@ export function AgentSettings({
 }) {
   const { draft, data, patchNode, setSelected } = c;
   const outcome = draft && connectedOutcome(draft, node.id);
+  const pdfCollision = draft?.edges.some(
+    (edge) =>
+      edge.kind === "tool" &&
+      edge.target === node.id &&
+      data?.tools.some(
+        (tool) =>
+          tool.name === "generate_pdf" &&
+          tool.id ===
+            draft.nodes.find((n) => n.id === edge.source)?.data.toolId,
+      ),
+  );
   return (
     <>
       <NativeSelect
@@ -113,6 +126,25 @@ export function AgentSettings({
         value={node.data.maxOutputTokens ?? 4096}
         onChange={(value) => patchNode({ maxOutputTokens: Number(value) })}
       />
+      <Checkbox
+        label="Generate PDF reports"
+        disabled={pdfCollision && !node.data.generatePdf}
+        error={
+          pdfCollision
+            ? "Rename the attached generate_pdf tool before enabling PDF reports."
+            : undefined
+        }
+        checked={node.data.generatePdf ?? false}
+        onChange={(event) =>
+          patchNode({ generatePdf: event.currentTarget.checked })
+        }
+      />
+      {node.data.generatePdf && (
+        <Stack gap="md">
+          <Text>Generated PDF instructions</Text>
+          <Code block>{pdfInstructions}</Code>
+        </Stack>
+      )}
       {outcome ? (
         <Stack gap="md">
           <Text>Generated completion instructions</Text>

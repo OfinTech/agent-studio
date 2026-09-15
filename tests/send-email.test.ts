@@ -319,3 +319,55 @@ it("retains Resend message_id in signed event parsing and retrieved email metada
     attachments: [attachment],
   });
 });
+
+import {
+  ReportStorage,
+  reportChecksum,
+} from "../packages/connectors/src/reports";
+it("constructs Resend attachments from selected immutable bytes without persisting content or paths", async () => {
+  vi.stubEnv("RESEND_API_KEY", "synthetic");
+  settings.set("RESEND_API_KEY", "synthetic");
+  const bytes = Buffer.from("%PDF-1.4 synthetic");
+  const reference = {
+    reportId: "11111111-1111-4111-8111-111111111111",
+    nodeId: "agent",
+    filename: "report.pdf" as const,
+    checksum: reportChecksum(bytes),
+    size: bytes.length,
+    pageCount: 1,
+  };
+  const read = vi
+    .spyOn(ReportStorage.prototype, "read")
+    .mockResolvedValue(bytes);
+  vi.mocked(boundedRequest).mockResolvedValue({
+    status: 200,
+    body: Buffer.from('{"id":"accepted"}'),
+  });
+  try {
+    const message = { ...render(), attachments: [reference] };
+    const before = JSON.stringify(message);
+    expect((await sendEmail(message, "synthetic-idempotency")).ok).toBe(true);
+    expect(read).toHaveBeenCalledWith(reference);
+    const request = JSON.parse(
+      vi.mocked(boundedRequest).mock.calls[0][1]!.body!,
+    );
+    expect(request.attachments).toEqual([
+      {
+        filename: "report.pdf",
+        content: bytes.toString("base64"),
+        content_type: "application/pdf",
+      },
+    ]);
+    expect(JSON.stringify(message)).toBe(before);
+    expect(request.attachments[0].reportId).toBeUndefined();
+    read.mockRejectedValueOnce(new Error("corrupt"));
+    expect(await sendEmail(message, "synthetic-idempotency")).toEqual({
+      ok: false,
+      error: "Email report file is missing or invalid",
+    });
+    expect(boundedRequest).toHaveBeenCalledTimes(1);
+  } finally {
+    read.mockRestore();
+    settings.delete("RESEND_API_KEY");
+  }
+});

@@ -1,3 +1,5 @@
+import { generatePdfTool } from "../../contracts/src/reports";
+import { generateReport, type CompileReport } from "./report-execution";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -30,6 +32,7 @@ export async function durableToolSession({
   legacyCalls,
   signal,
   dispatch,
+  compileReport,
 }: {
   runId: string;
   node: WorkflowNode;
@@ -37,9 +40,11 @@ export async function durableToolSession({
   legacyCalls?: boolean;
   signal: AbortSignal;
   dispatch?: ToolDispatch;
+  compileReport?: CompileReport;
 }) {
   const json = JSON.stringify;
   let currentCall = "";
+  let builtinError: unknown;
   const session = await createToolSession(
     nodeTools,
     async (tool, args) => {
@@ -118,6 +123,28 @@ export async function durableToolSession({
         ],
       );
     },
+    node.type === "agent" && node.data.generatePdf
+      ? [
+          {
+            definition: generatePdfTool,
+            invoke: async (args) => {
+              try {
+                return await generateReport(
+                  runId,
+                  node,
+                  currentCall,
+                  args,
+                  signal,
+                  compileReport,
+                );
+              } catch (error) {
+                builtinError = error;
+                return { ok: false, error: "PDF generation interrupted" };
+              }
+            },
+          },
+        ]
+      : [],
   );
 
   const invoke = async (
@@ -126,12 +153,17 @@ export async function durableToolSession({
     callId: string,
   ): Promise<ToolResult> => {
     currentCall = callId;
+    builtinError = undefined;
     const result = CallToolResultSchema.parse(
       await session.client.callTool({
         name,
         arguments: toolArguments.parse(args),
       }),
     );
+    if (builtinError)
+      throw new RetryError(
+        "PDF generation interrupted; retrying recorded call",
+      );
     const text = result.content?.find((part) => part.type === "text");
     let structured: ToolResult;
     try {

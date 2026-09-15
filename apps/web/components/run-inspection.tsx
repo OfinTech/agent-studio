@@ -200,6 +200,47 @@ export function RunInspector({
                     : "Pending"}
                 </Text>
               ))}
+            {!!run.reports?.length && <Title order={3}>PDF reports</Title>}
+            {run.reports?.map((report) => (
+              <Stack gap="md" key={report.id}>
+                <Text>
+                  {report.node_id} · Attempt {report.attempt_order}
+                  {report.current ? " · Current report" : ""}
+                </Text>
+                <Badge color={statusColor(report.status)}>
+                  {statusLabel(report.status)}
+                </Badge>
+                <Code block>{JSON.stringify(report.result, null, 2)}</Code>
+                {report.report_id && (
+                  <>
+                    <Text>
+                      {report.page_count} pages · {report.size} bytes
+                    </Text>
+                    {report.expired_at ? (
+                      <Text>Report expired</Text>
+                    ) : (
+                      <Button
+                        component="a"
+                        variant="default"
+                        href={`/api/runs/${run.id}/reports/${report.report_id}`}
+                        download="report.pdf"
+                      >
+                        Download report.pdf
+                      </Button>
+                    )}
+                    {report.extracted_text && (
+                      <Stack gap="md">
+                        <Text>
+                          Extracted text
+                          {report.text_truncated ? " (truncated)" : ""}
+                        </Text>
+                        <Code block>{report.extracted_text}</Code>
+                      </Stack>
+                    )}
+                  </>
+                )}
+              </Stack>
+            ))}
             {!!run.emailSends?.length && <Title order={3}>Emails</Title>}
             {run.emailSends?.map((send) => (
               <Stack gap="md" key={send.node_id}>
@@ -220,6 +261,22 @@ export function RunInspector({
                 <Text>Subject: {send.message.subject}</Text>
                 <Text>Body</Text>
                 <Code block>{send.message.text}</Code>
+                {send.message.attachments?.map((report) => (
+                  <Stack gap="md" key={report.reportId}>
+                    <Text>
+                      {report.filename} · {report.pageCount} pages ·{" "}
+                      {report.size} bytes
+                    </Text>
+                    <Button
+                      component="a"
+                      variant="default"
+                      href={`/api/runs/${run.id}/reports/${report.reportId}`}
+                      download="report.pdf"
+                    >
+                      Download email attachment
+                    </Button>
+                  </Stack>
+                ))}
                 {send.provider_email_id && (
                   <Text>Provider email ID: {send.provider_email_id}</Text>
                 )}

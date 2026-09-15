@@ -1,4 +1,28 @@
 services:
+  pdf-compiler:
+    build: ./services/pdf-compiler
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    pids_limit: 32
+    mem_limit: 512m
+    cpus: 1.0
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=0700"]
+    networks: [compiler]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
   db:
     image: postgres:17-alpine
     environment:
@@ -32,12 +56,16 @@ services:
       migrate: { condition: service_completed_successfully }
     restart: unless-stopped
   worker:
+    networks: [default, compiler]
     build: .
     env_file: .env
-    environment: *environment
+    environment:
+      <<: *environment
+      PDF_COMPILER_URL: http://pdf-compiler:8080
     command: ["pnpm", "worker"]
     volumes: ["attachments:/data/attachments"]
     depends_on:
+      pdf-compiler: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
     restart: unless-stopped
   caddy:
@@ -59,3 +87,7 @@ volumes:
   postgres:
   attachments:
   caddy:
+
+networks:
+  compiler:
+    internal: true

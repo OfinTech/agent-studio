@@ -1,3 +1,4 @@
+import { syntheticReportSource } from "../../contracts/src/reports";
 import { GoogleGenAI } from "@google/genai";
 import {
   getPath,
@@ -168,6 +169,24 @@ export class MockProvider implements Provider {
     signal: AbortSignal,
   ): Promise<Message> {
     signal.throwIfAborted();
+    if (
+      tools.some((t) => t.name === "generate_pdf") &&
+      !messages.some((m) =>
+        m.parts?.some((p) => p.functionResponse?.name === "generate_pdf"),
+      )
+    )
+      return {
+        role: "model",
+        parts: [
+          {
+            functionCall: {
+              id: "mock-pdf",
+              name: "generate_pdf",
+              args: { source: syntheticReportSource },
+            },
+          },
+        ],
+      };
     const finish = tools.find((t) => t.name === "finish_task");
     if (finish)
       return {

@@ -1404,3 +1404,109 @@ test("deletes a workflow after confirmation", async ({ page }) => {
   await expect(page).toHaveURL(/\/workflows$/);
   await expect(page.getByRole("link", { name, exact: true })).toHaveCount(0);
 });
+
+test("PDF capability, attachment selection, authenticated downloads and mobile settings survive publication", async ({
+  page,
+  request,
+}) => {
+  await signIn(page);
+  await createReceipt(page, "PDF reports");
+  const workflowId = page.url().split("/").at(-1)!;
+  const origin = new URL(page.url()).origin;
+  const bootstrap = await (await page.request.get("/api/bootstrap")).json();
+  const draft: Workflow = bootstrap.workflows.find(
+    (w: { id: string }) => w.id === workflowId,
+  ).draft;
+  draft.nodes.find((n) => n.type === "email")!.data.recipient =
+    `pdf-${workflowId}@example.com`;
+  draft.nodes.find((n) => n.type === "agent")!.data.requiredTool = undefined;
+  draft.nodes.push({
+    id: "reply",
+    type: "send_email",
+    position: { x: 1100, y: 0 },
+    data: { label: "PDF reply", bodyTemplate: "{{steps.agent.text}}" },
+  });
+  draft.edges.push({
+    id: "reply",
+    source: "agent",
+    target: "reply",
+    kind: "execution",
+  });
+  expect(
+    (
+      await page.request.put(`/api/workflows/${workflowId}`, {
+        headers: { origin },
+        data: draft,
+      })
+    ).ok(),
+  ).toBeTruthy();
+  await page.reload();
+  await page.locator('.react-flow__node[data-id="agent"]').click();
+  const capability = page.getByRole("checkbox", {
+    name: "Generate PDF reports",
+  });
+  await expect(capability).not.toBeChecked();
+  await capability.focus();
+  await page.keyboard.press("Space");
+  await expect(capability).toBeChecked();
+  await expect(
+    page.getByText("Generated PDF instructions", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Fit View", exact: true }).click();
+  const reply = page.locator('.react-flow__node[data-id="reply"]');
+  await reply.click();
+  await expect(page.getByLabel("Attach PDF report from")).toHaveValue("");
+  await page.getByLabel("Attach PDF report from").selectOption("agent");
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Published");
+  await page.reload();
+  await page.getByRole("button", { name: "Test run", exact: true }).click();
+  await expect(page.getByTestId("run-status")).toHaveText("succeeded", {
+    timeout: 40000,
+  });
+  const inspector = page.getByTestId("run-inspector");
+  await expect(
+    inspector.getByText("Preview only", { exact: true }),
+  ).toBeVisible();
+  await expect(inspector.getByText(/Attempt 1 · Current report/)).toBeVisible();
+  const download = inspector.getByRole("link", {
+    name: "Download email attachment",
+  });
+  const href = (await download.getAttribute("href"))!;
+  const pdf = await page.request.get(href);
+  expect(pdf.status()).toBe(200);
+  expect(pdf.headers()["content-type"]).toBe("application/pdf");
+  expect((await pdf.body()).subarray(0, 5).toString()).toBe("%PDF-");
+  expect((await request.get(href)).status()).toBe(401);
+  expect(
+    (
+      await page.request.get(href.replace(/\/runs\/[^/]+/, "/runs/foreign-run"))
+    ).status(),
+  ).toBe(404);
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "Test run", exact: true }),
+  ).toBeFocused();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Fit View", exact: true }).click();
+  await reply.click();
+  const drawer = page.getByRole("dialog", {
+    name: "Step settings",
+    exact: true,
+  });
+  await expect(drawer.getByLabel("Attach PDF report from")).toHaveValue(
+    "agent",
+  );
+  await drawer.getByLabel("Attach PDF report from").focus();
+  await page.keyboard.press("Escape");
+  await expect(drawer).not.toBeVisible();
+  await expect(reply).toBeVisible();
+});

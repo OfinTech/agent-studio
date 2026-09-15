@@ -1,11 +1,15 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   text,
   jsonb,
   timestamp,
   integer,
+  boolean,
   index,
   uniqueIndex,
+  unique,
+  check,
 } from "drizzle-orm/pg-core";
 import type {
   Workflow,
@@ -165,3 +169,61 @@ export const settings = pgTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
 });
+
+export const generatedReports = pgTable(
+  "generated_reports",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id),
+    nodeId: text("node_id").notNull(),
+    checksum: text("checksum").notNull(),
+    size: integer("size").notNull(),
+    pageCount: integer("page_count").notNull(),
+    extractedText: text("extracted_text"),
+    textTruncated: boolean("text_truncated").notNull(),
+    createdAt: created(),
+    expiredAt: timestamp("expired_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("generated_reports_run").on(t.runId),
+    check(
+      "generated_reports_size_check",
+      sql`${t.size} > 0 AND ${t.size} <= 10485760`,
+    ),
+    check(
+      "generated_reports_page_count_check",
+      sql`${t.pageCount} BETWEEN 1 AND 20`,
+    ),
+  ],
+);
+export const reportAttempts = pgTable(
+  "report_attempts",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id),
+    nodeId: text("node_id").notNull(),
+    attemptOrder: integer("attempt_order").notNull(),
+    sourceHash: text("source_hash").notNull(),
+    rendererProfile: text("renderer_profile").notNull(),
+    status: text("status").notNull(),
+    result: jsonb("result"),
+    reportId: text("report_id").references(() => generatedReports.id),
+    createdAt: created(),
+  },
+  (t) => [
+    unique("report_attempts_run_id_node_id_attempt_order_key").on(
+      t.runId,
+      t.nodeId,
+      t.attemptOrder,
+    ),
+    index("report_attempts_run_node").on(t.runId, t.nodeId),
+    check(
+      "report_attempts_status_check",
+      sql`${t.status} IN ('running','succeeded','failed')`,
+    ),
+  ],
+);

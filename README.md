@@ -200,3 +200,9 @@ RUN_LIVE_EMAIL=1 LIVE_EMAIL_WORKFLOW_ID=... LIVE_EMAIL_SENDER=you@your-controlle
 ```
 
 This observer verifies a real inbound run, reply headers, Resend acceptance, and that only the selected branch sent. Repeat with tasks selecting each branch. Confirm delivery and threading in the controlled inbox separately. Missing configuration is reported as skipped with nonzero exit when opted in; without the flag there are no live calls. The existing real inbound receipt and live-provider Outcome checks remain required; fixture passes do not count as live verification.
+
+## Generated PDF reports
+
+Agents can opt into **Generate PDF reports** and compile LaTeX with the built-in `generate_pdf` tool. In Send email, select **Attach PDF report from** to attach one earlier Agent's report. Outcome remains optional. Test runs generate real PDFs and preview attachments without dispatching email.
+
+Start the compiler for native development with `docker compose --profile native up --build -d pdf-compiler pdf-local-worker`; container workers connect through a private internal network. See [PDF reports](docs/pdf-reports.md) for supported packages, limits, durable recovery, retention, deployment and synthetic/live verification.

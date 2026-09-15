@@ -161,13 +161,24 @@ export async function createToolSession(
     args: unknown,
     result: ToolResult,
   ) => Promise<void>,
+  builtins: {
+    definition: Pick<ToolDefinition, "name" | "description" | "inputSchema">;
+    invoke: (args: unknown) => Promise<ToolResult>;
+  }[] = [],
 ) {
+  if (
+    new Set(
+      [...definitions, ...builtins.map((b) => b.definition)].map((t) => t.name),
+    ).size !==
+    definitions.length + builtins.length
+  )
+    throw new ConfigurationError("Duplicate built-in tool name");
   const server = new Server(
     { name: "agent-platform-tools", version: "1.0.0" },
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: definitions.map((t) => ({
+    tools: [...definitions, ...builtins.map((b) => b.definition)].map((t) => ({
       name: t.name,
       description: t.description,
       inputSchema: { ...t.inputSchema, type: "object" as const },
@@ -176,7 +187,11 @@ export async function createToolSession(
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const tool = definitions.find((t) => t.name === request.params.name);
     let result: ToolResult;
-    if (!tool) result = { ok: false, error: "Unknown tool" };
+    const builtin = builtins.find(
+      (b) => b.definition.name === request.params.name,
+    );
+    if (builtin) result = await builtin.invoke(request.params.arguments);
+    else if (!tool) result = { ok: false, error: "Unknown tool" };
     else {
       const validate = ajv.compile(tool.inputSchema);
       result = validate(request.params.arguments)
@@ -186,7 +201,10 @@ export async function createToolSession(
             error: "Invalid tool arguments: " + ajv.errorsText(validate.errors),
           };
     }
-    if (!tool || result.error?.startsWith("Invalid tool arguments"))
+    if (
+      !builtin &&
+      (!tool || result.error?.startsWith("Invalid tool arguments"))
+    )
       await onRejected?.(request.params.name, request.params.arguments, result);
     return {
       isError: !result.ok,

@@ -1,3 +1,9 @@
+import { generatePdfTool, pdfInstructions } from "../../contracts/src/reports";
+import {
+  currentReport,
+  cleanupReports,
+  type CompileReport,
+} from "./report-execution";
 import { query, resolveCredential } from "../../persistence/src/index";
 import { setting } from "../../persistence/src/settings";
 import {
@@ -63,6 +69,7 @@ export async function executeRun(
   runId: string,
   overrides: {
     provider?: Provider;
+    compileReport?: CompileReport;
     dispatch?: ToolDispatch;
     afterCheckpoint?: (state: Checkpoint) => Promise<void>;
     sendEmail?: (
@@ -232,6 +239,7 @@ export async function executeRun(
           legacyCalls: state.legacyCalls,
           signal,
           dispatch: overrides.dispatch,
+          compileReport: overrides.compileReport,
         });
         const { invoke } = session;
         if (node.type === "action") {
@@ -311,10 +319,12 @@ export async function executeRun(
               (legacyWorkflow
                 ? node.data.systemPrompt!
                 : renderPrompt(node.data.systemPrompt!, context)) +
-              (outcome ? "\n\n" + completionInstructions(outcome) : ""),
+              (outcome ? "\n\n" + completionInstructions(outcome) : "") +
+              (node.data.generatePdf ? "\n\n" + pdfInstructions : ""),
           };
           const declarations = [
             ...nodeTools,
+            ...(node.data.generatePdf ? [generatePdfTool] : []),
             ...(outcome ? [completionTool(outcome)] : []),
           ];
           let finished = false;
@@ -351,6 +361,9 @@ export async function executeRun(
                 await complete(
                   node.id,
                   {
+                    ...(node.data.generatePdf
+                      ? { report: await currentReport(runId, node.id) }
+                      : {}),
                     text: report.result,
                     turns: local.turn + 1,
                     outcome: report,
@@ -393,6 +406,9 @@ export async function executeRun(
                 await complete(
                   node.id,
                   {
+                    ...(node.data.generatePdf
+                      ? { report: await currentReport(runId, node.id) }
+                      : {}),
                     text: local.pending.parts
                       ?.map((p) => p.text ?? "")
                       .join(""),
@@ -489,6 +505,7 @@ export async function maintenance() {
     await cleanupProviderFiles(row.run_id).catch(() =>
       console.error("Provider cleanup deferred"),
     );
+  await cleanupReports();
   const storage = new LocalStorage();
   await storage.expireOrphans(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   for (const row of await query(

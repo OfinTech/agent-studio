@@ -1,3 +1,6 @@
+import { getPath } from "../../contracts/src/index";
+import { reportReferenceSchema } from "../../contracts/src/reports";
+import { validateReport } from "./report-execution";
 import { createHash } from "node:crypto";
 import { query } from "../../persistence/src/index";
 import type { Email, WorkflowNode } from "../../contracts/src/index";
@@ -63,6 +66,20 @@ export async function executeEmailStep({
   );
   if (!record) {
     const message = renderEmailReply(node, from, email, outputs);
+    if (node.data.reportSourceNodeId) {
+      const reference = getPath(
+        outputs[node.data.reportSourceNodeId],
+        "report",
+      );
+      const parsed = reportReferenceSchema.safeParse(reference);
+      if (
+        !parsed.success ||
+        parsed.data.nodeId !== node.data.reportSourceNodeId
+      )
+        throw new Error("Email report from the selected Agent is missing");
+      await validateReport(runId, parsed.data);
+      message.attachments = [parsed.data];
+    }
     const mode = preview ? "preview" : "live";
     [record] = await query(
       "INSERT INTO email_sends(run_id,node_id,message,mode,status) VALUES($1,$2,$3,$4,'prepared') ON CONFLICT(run_id,node_id) DO UPDATE SET node_id=excluded.node_id RETURNING *",
@@ -74,6 +91,9 @@ export async function executeEmailStep({
     throw new ReviewError("Email send requires review");
   if (record.status === "failed")
     throw new Error(record.error ?? "Email sending failed");
+  if (record.status !== "succeeded")
+    for (const report of record.message.attachments ?? [])
+      await validateReport(runId, report);
   let providerEmailId: string | null = record.provider_email_id;
   if (record.mode === "live" && record.status !== "succeeded") {
     signal.throwIfAborted();

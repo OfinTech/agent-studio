@@ -1,3 +1,7 @@
+import {
+  resolveReport,
+  validateReport,
+} from "../../../../../packages/runtime/src/report-execution";
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -299,13 +303,40 @@ async function handle(
       if (!rows.length) throw new HttpError(404, "Tool not found");
       return response(tool);
     }
+    if (
+      path[0] === "runs" &&
+      path.length === 4 &&
+      path[2] === "reports" &&
+      method === "GET"
+    ) {
+      const [file] = await query(
+        "SELECT node_id FROM generated_reports WHERE id=$1 AND run_id=$2",
+        [path[3], path[1]],
+      );
+      if (!file) throw new HttpError(404, "Report not found");
+      try {
+        const reference = await resolveReport(path[1], file.node_id, path[3]);
+        const bytes = await validateReport(path[1], reference);
+        return new NextResponse(new Uint8Array(bytes), {
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": 'attachment; filename="report.pdf"',
+            "Content-Length": String(bytes.length),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+          },
+        });
+      } catch {
+        throw new HttpError(404, "Report is missing, expired or invalid");
+      }
+    }
     if (path[0] === "runs" && path.length === 2 && method === "GET") {
       const [run] = await query(
         "SELECT r.*,v.number,v.snapshot FROM runs r JOIN versions v ON v.id=r.version_id WHERE r.id=$1",
         [path[1]],
       );
       if (!run) throw new HttpError(404, "Run not found");
-      const [steps, calls, emailSends] = await Promise.all([
+      const [steps, calls, emailSends, reports] = await Promise.all([
         query("SELECT * FROM steps WHERE run_id=$1 ORDER BY created_at", [
           path[1],
         ]),
@@ -315,8 +346,12 @@ async function handle(
         query("SELECT * FROM email_sends WHERE run_id=$1 ORDER BY created_at", [
           path[1],
         ]),
+        query(
+          "SELECT a.id,a.node_id,a.attempt_order,a.source_hash,a.renderer_profile,a.status,a.report_id,CASE WHEN r.finished_at < now()-interval '7 days' THEN a.result #- '{data,textPreview}' ELSE a.result END AS result,g.page_count,g.size,g.text_truncated,CASE WHEN r.finished_at < now()-interval '7 days' THEN NULL ELSE g.extracted_text END AS extracted_text,CASE WHEN r.finished_at < now()-interval '7 days' THEN r.finished_at ELSE g.expired_at END AS expired_at,(a.status='succeeded' AND g.expired_at IS NULL AND (r.finished_at IS NULL OR r.finished_at > now()-interval '7 days') AND a.attempt_order=(SELECT max(b.attempt_order) FROM report_attempts b WHERE b.run_id=a.run_id AND b.node_id=a.node_id)) AS current FROM report_attempts a JOIN runs r ON r.id=a.run_id LEFT JOIN generated_reports g ON g.id=a.report_id WHERE a.run_id=$1 ORDER BY a.node_id,a.attempt_order",
+          [path[1]],
+        ),
       ]);
-      return response(redact({ ...run, steps, calls, emailSends }));
+      return response(redact({ ...run, steps, calls, emailSends, reports }));
     }
     throw new HttpError(404, "Route not found");
   } catch (error) {

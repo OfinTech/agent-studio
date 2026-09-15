@@ -1,3 +1,4 @@
+import { reportSources, type ReportReference } from "./reports";
 import { z } from "zod";
 
 const id = z.string().min(1).max(100);
@@ -70,6 +71,9 @@ export const nodeSchema = z.object({
       .max(20)
       .optional(),
     arguments: z.record(z.unknown()).optional(),
+    generatePdf: z.boolean().optional(),
+    rendererProfile: z.string().max(100).optional(),
+    reportSourceNodeId: id.optional(),
     subjectTemplate: z.string().max(1000).optional(),
     bodyTemplate: z.string().max(20000).optional(),
   }),
@@ -106,6 +110,7 @@ export type EmailMessage = {
   subject: string;
   text: string;
   headers?: { "In-Reply-To": string; References: string };
+  attachments?: ReportReference[];
 };
 export type Attachment = {
   id: string;
@@ -447,6 +452,10 @@ export function validateWorkflow(
         .filter((e) => e.kind === "tool" && e.target === n.id)
         .map((e) => nodes.get(e.source)?.data.toolId);
       const attached = tools.filter((t) => attachedIds.includes(t.id));
+      if (n.data.generatePdf && attached.some((t) => t.name === "generate_pdf"))
+        errors.push(
+          "generate_pdf conflicts with the built-in PDF report tool.",
+        );
       if (new Set(attached.map((t) => t.name)).size !== attached.length)
         errors.push("Attached tool names must be unique.");
       if (
@@ -535,6 +544,15 @@ export function validateWorkflow(
     }
     if (node.type === "action") check(node.data.arguments);
     if (node.type === "send_email") {
+      if (
+        node.data.reportSourceNodeId &&
+        !reportSources(workflow, node.id).some(
+          (n) => n.id === node.data.reportSourceNodeId,
+        )
+      )
+        errors.push(
+          "Select a PDF-enabled ancestor Agent for the email attachment.",
+        );
       for (const template of [
         node.data.subjectTemplate ?? "",
         node.data.bodyTemplate ?? "",
