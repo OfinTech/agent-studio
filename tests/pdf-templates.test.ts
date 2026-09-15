@@ -1,3 +1,4 @@
+import { receiptWorkflow, receiptTool } from "../fixtures/receipt-workflow";
 import { it, expect } from "vitest";
 import {
   GeminiProvider,
@@ -14,12 +15,7 @@ import {
   imageResourcesSchema,
   TEMPLATE_PROFILE,
 } from "../packages/contracts/src/pdf-templates";
-import {
-  receiptWorkflow,
-  receiptTool,
-  validateWorkflow,
-  canConnect,
-} from "../packages/contracts/src/index";
+import { validateWorkflow, canConnect } from "../packages/contracts/src/index";
 import {
   validateImage,
   compilationFilename,

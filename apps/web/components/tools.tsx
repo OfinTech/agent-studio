@@ -17,10 +17,7 @@ import {
   Title,
 } from "@mantine/core";
 import { isNotEmpty, useForm } from "@mantine/form";
-import {
-  receiptTool,
-  type ToolDefinition,
-} from "../../../packages/contracts/src/index";
+import { type ToolDefinition } from "../../../packages/contracts/src/index";
 import { api } from "./platform-types";
 import type { PlatformController } from "./use-platform";
 export function Tools({ controller: c }: { controller: PlatformController }) {
@@ -89,12 +86,14 @@ export function ToolDialog({
 }: {
   controller: PlatformController;
 }) {
-  const initial = c.editingTool ?? {
-    ...receiptTool,
+  const initial: ToolDefinition = c.editingTool ?? {
     id: "new",
     name: "my_api_tool",
     description: "",
-    endpoint: "https://api.example.com/receipts",
+    endpoint: "",
+    method: "POST",
+    inputSchema: { type: "object", properties: {} },
+    mappings: [],
     auth: { type: "none" as const, header: "X-API-Key" },
   };
   const form = useForm({

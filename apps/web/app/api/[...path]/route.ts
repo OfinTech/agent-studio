@@ -28,9 +28,10 @@ import {
   toolSchema,
   ConfigurationError,
   workflowSchema,
-  receiptWorkflow,
 } from "../../../../../packages/contracts/src/index";
 import {
+  createWorkflow,
+  WorkflowNotFoundError,
   publish,
   saveDraft,
   testRun,
@@ -235,19 +236,23 @@ async function handle(
       return response({ ok: true });
     }
     if (route === "workflows" && method === "POST") {
+      const input = JSON.parse(await body(request));
+      if (input && typeof input === "object" && "template" in input)
+        throw new HttpError(
+          400,
+          "The template parameter is no longer supported. Omit it for a blank workflow or use duplicateFromWorkflowId to copy a saved draft.",
+        );
       const data = z
         .object({
-          name: z.string().min(1).max(100),
-          template: z.enum(["blank", "receipt"]).default("blank"),
+          name: z.string().trim().min(1).max(100),
+          duplicateFromWorkflowId: z.string().min(1).max(100).optional(),
         })
-        .parse(JSON.parse(await body(request)));
-      const id = randomUUID();
-      const workflow =
-        data.template === "receipt"
-          ? { ...receiptWorkflow, name: data.name }
-          : { name: data.name, nodes: [], edges: [] };
-      await saveDraft(id, workflow);
-      return response({ id, draft: workflow }, 201);
+        .strict()
+        .parse(input);
+      return response(
+        await createWorkflow(data.name, data.duplicateFromWorkflowId),
+        201,
+      );
     }
     if (path[0] === "workflows" && path[2] === "resources") {
       if (path.length === 3 && method === "POST") {
@@ -404,6 +409,8 @@ async function handle(
     }
     throw new HttpError(404, "Route not found");
   } catch (error) {
+    if (error instanceof WorkflowNotFoundError)
+      return response({ error: error.message }, 404);
     if (error instanceof HttpError)
       return response({ error: error.message }, error.status);
     if (error instanceof z.ZodError)

@@ -1,12 +1,10 @@
+import { receiptWorkflow } from "../fixtures/receipt-workflow";
 // Run inside the deployed web container. Uses an in-memory administrator session;
 // creates only a synthetic Test run, verifies preview mode, and removes its workflow.
 import assert from "node:assert/strict";
 import sharp from "sharp";
 import { createSession, SESSION_COOKIE } from "../apps/web/lib/auth";
-import {
-  receiptWorkflow,
-  type Workflow,
-} from "../packages/contracts/src/index";
+import { type Workflow } from "../packages/contracts/src/index";
 import { defaultPdfTemplate } from "../packages/contracts/src/pdf-templates";
 const base = process.env.APP_URL!;
 const headers = {
@@ -28,10 +26,10 @@ async function api(
 }
 assert((await fetch(`${base}/login`)).ok);
 assert((await fetch(`${base}/api/health`)).ok);
-const workflow = await api("workflows", {
+let workflow = await api("workflows", {
   name: "Synthetic deployment PDF check",
-  template: "blank",
 });
+const createdIds = new Set<string>([workflow.id]);
 let terminal = true;
 try {
   const bytes = await sharp({
@@ -44,7 +42,7 @@ try {
     { method: "POST", headers, body: new Uint8Array(bytes) },
   );
   assert(uploaded.ok, `Upload: HTTP ${uploaded.status}`);
-  const image = await uploaded.json();
+  let image = await uploaded.json();
   const draft: Workflow = {
     name: workflow.draft.name,
     nodes: structuredClone(receiptWorkflow.nodes.slice(0, 3)),
@@ -86,6 +84,23 @@ try {
     { id: "reply", source: "agent", target: "reply", kind: "execution" },
   );
   await api(`workflows/${workflow.id}`, draft, "PUT");
+  const copy = await api("workflows", {
+    name: "Synthetic duplicated PDF check",
+    duplicateFromWorkflowId: workflow.id,
+  });
+  createdIds.add(copy.id);
+  const copiedImage = (copy.draft as Workflow).nodes.find(
+    (node) => node.type === "pdf_template",
+  )!.data.pdfTemplate!.images[0];
+  assert.notEqual(copiedImage.id, image.id);
+  assert.deepEqual({ ...copiedImage, id: image.id }, image);
+  assert.equal(copy.draft.nodes[0].data.recipient, "");
+  await api(`workflows/${workflow.id}`, undefined, "DELETE");
+  createdIds.delete(workflow.id);
+  workflow = copy;
+  image = copiedImage;
+  workflow.draft.nodes[0].data.recipient = `deployment-${workflow.id}@example.com`;
+  await api(`workflows/${workflow.id}`, workflow.draft, "PUT");
   await api(`workflows/${workflow.id}/publish`, {});
   const run = await api(`workflows/${workflow.id}/test`, {});
   terminal = false;
@@ -116,13 +131,15 @@ try {
       assert.equal((await fetch(`${base}/api/${path}`)).status, 401);
     }
     console.log(
-      "PASS public health/login, authenticated upload/download, template compilation and preview-only email attachment",
+      "PASS public health/login, independent duplicated images after source deletion, authenticated downloads, template compilation and preview-only email attachment",
     );
     break;
   }
   assert(terminal, `Synthetic run did not complete: ${run.id}`);
 } finally {
-  if (terminal) await api(`workflows/${workflow.id}`, undefined, "DELETE");
+  if (terminal)
+    for (const id of createdIds)
+      await api(`workflows/${id}`, undefined, "DELETE");
   else
     console.error(`Synthetic workflow retained for inspection: ${workflow.id}`);
 }

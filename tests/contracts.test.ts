@@ -1,7 +1,6 @@
+import { receiptWorkflow, receiptTool } from "../fixtures/receipt-workflow";
 import { describe, it, expect } from "vitest";
 import {
-  receiptWorkflow,
-  receiptTool,
   validateWorkflow,
   renderPrompt,
   getPath,

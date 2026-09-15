@@ -1,3 +1,4 @@
+import { receiptWorkflow, receiptTool } from "../fixtures/receipt-workflow";
 import { describe, it, expect } from "vitest";
 import {
   addOutcome,
@@ -9,8 +10,6 @@ import {
   updateOutcomeStates,
   resolveArguments,
   validateWorkflow,
-  receiptWorkflow,
-  receiptTool,
   workflowSchema,
   type Workflow,
 } from "../packages/contracts/src/index";

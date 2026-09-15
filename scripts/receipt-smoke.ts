@@ -1,3 +1,4 @@
+import { receiptWorkflow, receiptTool } from "../fixtures/receipt-workflow";
 // Runs against an already-started synthetic Docker stack; no live providers.
 import assert from "node:assert/strict";
 import type { Workflow } from "../packages/contracts/src/index";
@@ -46,11 +47,32 @@ await request("auth/login", {
   email: process.env.ADMIN_EMAIL ?? "admin@example.com",
   password,
 });
+const tool = {
+  ...receiptTool,
+  endpoint: process.env.SMOKE_TOOL_ENDPOINT ?? "http://mock-api:4010/receipts",
+};
+const bootstrap = await request("bootstrap");
+await request(
+  "settings",
+  {
+    TOOL_ALLOWED_ORIGINS: [
+      ...new Set([
+        ...bootstrap.settings.TOOL_ALLOWED_ORIGINS.split(",").filter(Boolean),
+        new URL(tool.endpoint).origin,
+      ]),
+    ].join(","),
+  },
+  "PUT",
+);
+const savedTool = await request("tools", tool);
 const workflow = await request("workflows", {
   name: `Docker receipt ${Date.now()}`,
-  template: "receipt",
 });
-const draft = workflow.draft as Workflow;
+const draft: Workflow = {
+  ...structuredClone(receiptWorkflow),
+  name: workflow.draft.name,
+};
+draft.nodes.find((node) => node.type === "tool")!.data.toolId = savedTool.id;
 await request(
   `workflows/${workflow.id}`,
   {

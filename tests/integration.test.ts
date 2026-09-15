@@ -1,3 +1,4 @@
+import { receiptTool, receiptWorkflow } from "../fixtures/receipt-workflow";
 import sharp from "sharp";
 import {
   defaultPdfTemplate,
@@ -14,9 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import {
-  receiptTool,
   addOutcome,
-  receiptWorkflow,
   type Workflow,
   type ToolDefinition,
 } from "../packages/contracts/src/index";
@@ -2040,6 +2039,248 @@ suite("PostgreSQL execution and recovery", () => {
     w.version = await runtime.publish(w.id);
     return { ...w, image, bytes, resources };
   }
+  it("creates blank drafts and duplicates saved drafts without publication, routing or history", async () => {
+    const blank = await runtime.createWorkflow("Blank");
+    expect(blank).toEqual({
+      id: expect.any(String),
+      draft: { name: "Blank", nodes: [], edges: [] },
+    });
+    const source = await workflow();
+    const run = await runFor(source.version.id);
+    const draft = addOutcome(
+      structuredClone(source.draft),
+      "agent",
+      "stable-outcome",
+    );
+    draft.nodes[2].data.credentialId = "shared-credential";
+    draft.nodes[2].data.reportSourceNodeId = "agent";
+    draft.nodes[2].data.userPrompt = "Saved {{steps.upload.count}}";
+    draft.nodes.push({
+      ...structuredClone(draft.nodes[0]),
+      id: "second-email",
+    });
+    await runtime.saveDraft(source.id, draft);
+    const copy = await runtime.createWorkflow("Copy", source.id);
+    expect(copy.id).not.toBe(source.id);
+    const expected = structuredClone(draft);
+    expected.name = "Copy";
+    for (const node of expected.nodes)
+      if (node.type === "email") node.data.recipient = "";
+    expect(copy.draft).toEqual(expected);
+    expect(
+      (
+        await persistence.query("SELECT * FROM workflows WHERE id=$1", [
+          copy.id,
+        ])
+      )[0],
+    ).toMatchObject({ published_version: null, recipient: null });
+    expect(
+      await persistence.query("SELECT * FROM versions WHERE workflow_id=$1", [
+        copy.id,
+      ]),
+    ).toEqual([]);
+    expect((await status(run.id)).version_id).toBe(source.version.id);
+    expect(
+      (
+        await persistence.query("SELECT snapshot FROM versions WHERE id=$1", [
+          source.version.id,
+        ])
+      )[0].snapshot.workflow,
+    ).toEqual(source.draft);
+    copy.draft.nodes[2].data.userPrompt = "Independent edit";
+    await runtime.saveDraft(copy.id, copy.draft);
+    expect(
+      (
+        await persistence.query("SELECT draft FROM workflows WHERE id=$1", [
+          source.id,
+        ])
+      )[0].draft,
+    ).toEqual(draft);
+    await expect(
+      runtime.createWorkflow("Missing", randomUUID()),
+    ).rejects.toBeInstanceOf(runtime.WorkflowNotFoundError);
+  });
+  it("copies repeated PDF references once and keeps images usable after source replacement and deletion", async () => {
+    const source = await templateWorkflow();
+    const repeated = structuredClone(source.draft.nodes.at(-1)!);
+    repeated.id = "second-template";
+    repeated.data.pdfTemplate!.toolName = "second_pdf";
+    source.draft.nodes.push(repeated);
+    await runtime.saveDraft(source.id, source.draft);
+    const copy = await runtime.createWorkflow("Independent images", source.id);
+    const images = copy.draft.nodes
+      .filter((node) => node.data.pdfTemplate)
+      .map((node) => node.data.pdfTemplate!.images[0]);
+    expect(images[0]).toEqual({ ...source.image, id: expect.any(String) });
+    expect(images[0].id).not.toBe(source.image.id);
+    expect(images[1]).toEqual(images[0]);
+    expect(
+      await persistence.query(
+        "SELECT id FROM template_resources WHERE workflow_id=$1",
+        [copy.id],
+      ),
+    ).toHaveLength(1);
+    source.draft.nodes = source.draft.nodes.filter(
+      (node) => node.type !== "pdf_template",
+    );
+    await runtime.saveDraft(source.id, source.draft);
+    await runtime.deleteWorkflow(source.id);
+    expect(
+      await source.resources.readTemplateResource(copy.id, images[0]),
+    ).toEqual(source.bytes);
+    await source.resources.cleanupTemplateResources();
+    expect(
+      await source.resources.readTemplateResource(copy.id, images[0]),
+    ).toEqual(source.bytes);
+  });
+  it.each(["metadata", "missing", "checksum"])(
+    "rolls back duplication for %s image failures and reclaims orphan bytes",
+    async (failure) => {
+      const source = await templateWorkflow();
+      const second = await source.resources.uploadTemplateResource(
+        source.id,
+        "second.png",
+        source.bytes,
+      );
+      source.draft.nodes.at(-1)!.data.pdfTemplate!.images.push(second);
+      await runtime.saveDraft(source.id, source.draft);
+      const { TemplateResourceStorage } =
+        await import("../packages/connectors/src/template-resources");
+      const { writeFile, readdir, utimes } = await import("node:fs/promises");
+      const storage = new TemplateResourceStorage();
+      if (failure === "metadata")
+        await persistence.query("DELETE FROM template_resources WHERE id=$1", [
+          second.id,
+        ]);
+      if (failure === "missing") await storage.delete(second.id);
+      if (failure === "checksum")
+        await writeFile(
+          storage.path(second.id),
+          Buffer.alloc(source.bytes.length),
+        );
+      const before = await persistence.query(
+        "SELECT id FROM workflows ORDER BY id",
+      );
+      const beforeResources = await persistence.query(
+        "SELECT id FROM template_resources ORDER BY id",
+      );
+      const beforeFiles = new Set(await readdir(storage.root));
+      await expect(
+        runtime.createWorkflow("Must roll back", source.id),
+      ).rejects.toThrow();
+      expect(
+        await persistence.query("SELECT id FROM workflows ORDER BY id"),
+      ).toEqual(before);
+      expect(
+        await persistence.query(
+          "SELECT id FROM template_resources ORDER BY id",
+        ),
+      ).toEqual(beforeResources);
+      const orphans = (await readdir(storage.root)).filter(
+        (file) => !beforeFiles.has(file),
+      );
+      expect(orphans).toHaveLength(1);
+      const old = new Date(Date.now() - 8 * 86400000);
+      for (const file of orphans)
+        await utimes(join(storage.root, file), old, old);
+      await source.resources.cleanupTemplateResources();
+      expect(
+        (await readdir(storage.root)).filter((file) => orphans.includes(file)),
+      ).toEqual([]);
+      await runtime.deleteWorkflow(source.id);
+    },
+  );
+  it("waits for an in-flight save and copies its committed draft", async () => {
+    const source = await workflow();
+    const client = await persistence.pool.connect();
+    let copying: ReturnType<typeof runtime.createWorkflow> | undefined;
+    try {
+      await client.query("BEGIN");
+      source.draft.nodes[2].data.userPrompt = "Committed concurrent save";
+      await client.query("UPDATE workflows SET draft=$2 WHERE id=$1", [
+        source.id,
+        JSON.stringify(source.draft),
+      ]);
+      copying = runtime.createWorkflow("After save", source.id);
+      await vi.waitFor(async () => {
+        expect(
+          (
+            await persistence.query(
+              "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT draft FROM workflows%FOR UPDATE'",
+            )
+          ).length,
+        ).toBeGreaterThan(0);
+      });
+      await client.query("COMMIT");
+      expect((await copying).draft.nodes[2].data.userPrompt).toBe(
+        "Committed concurrent save",
+      );
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+      await copying;
+    }
+  });
+  it.each(["save", "delete", "cleanup"])(
+    "holds the source lock through image copying during concurrent %s",
+    async (operation) => {
+      const source = await templateWorkflow();
+      const { TemplateResourceStorage } =
+        await import("../packages/connectors/src/template-resources");
+      const original = TemplateResourceStorage.prototype.readImage;
+      let release!: () => void;
+      let started!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const read = vi
+        .spyOn(TemplateResourceStorage.prototype, "readImage")
+        .mockImplementationOnce(async function (
+          this: InstanceType<typeof TemplateResourceStorage>,
+          image,
+        ) {
+          const bytes = await original.call(this, image);
+          started();
+          await gate;
+          return bytes;
+        });
+      const copying = runtime.createWorkflow("Concurrent copy", source.id);
+      let concurrent: Promise<unknown> | undefined;
+      try {
+        await entered;
+        source.draft.nodes.at(-1)!.data.pdfTemplate!.images = [];
+        concurrent =
+          operation === "save"
+            ? runtime.saveDraft(source.id, source.draft)
+            : operation === "delete"
+              ? runtime.deleteWorkflow(source.id)
+              : source.resources.cleanupTemplateResources();
+        await vi.waitFor(async () => {
+          expect(
+            (
+              await persistence.query(
+                "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",
+              )
+            ).length,
+          ).toBeGreaterThan(0);
+        });
+        release();
+        const copy = await copying;
+        await concurrent;
+        const image = copy.draft.nodes.at(-1)!.data.pdfTemplate!.images[0];
+        expect(
+          await source.resources.readTemplateResource(copy.id, image),
+        ).toEqual(source.bytes);
+      } finally {
+        release();
+        read.mockRestore();
+        await Promise.allSettled([copying, concurrent]);
+      }
+    },
+  );
   const templateCompile = async (source: string) => ({
     ...(await fakeCompile(source)),
     profile: TEMPLATE_PROFILE as typeof TEMPLATE_PROFILE,

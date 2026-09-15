@@ -1,8 +1,67 @@
+import { receiptWorkflow, receiptTool } from "../../fixtures/receipt-workflow";
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import type { Workflow } from "../../packages/contracts/src/index";
 // Reuse the authenticated session in memory so UI scenarios respect the login
 // rate limit while keeping separate browser contexts and testing real sign-in.
 let sessionCookies: Awaited<ReturnType<BrowserContext["cookies"]>> | undefined;
+let receiptSource: { id: string; draft: Workflow };
+let receiptToolId: string;
+async function receiptRecord(page: Page, name: string) {
+  const headers = { Origin: new URL(page.url()).origin };
+  const created = await page.request.post("/api/workflows", {
+    headers,
+    data: { name },
+  });
+  expect(created.status()).toBe(201);
+  const record = (await created.json()) as { id: string; draft: Workflow };
+  record.draft = { ...structuredClone(receiptWorkflow), name };
+  record.draft.nodes[0].data.recipient = `fixture-${record.id}@example.com`;
+  record.draft.nodes[3].data.toolId = receiptToolId;
+  expect(
+    (
+      await page.request.put(`/api/workflows/${record.id}`, {
+        headers,
+        data: record.draft,
+      })
+    ).ok(),
+  ).toBe(true);
+  return record;
+}
+async function prepareReceiptFixture(page: Page) {
+  if (receiptSource) return;
+  const headers = { Origin: new URL(page.url()).origin };
+  const bootstrap = await (await page.request.get("/api/bootstrap")).json();
+  const endpoint =
+    process.env.E2E_TOOL_ENDPOINT ?? "http://localhost:4010/receipts";
+  expect(
+    (
+      await page.request.put("/api/settings", {
+        headers,
+        data: {
+          TOOL_ALLOWED_ORIGINS: [
+            ...new Set([
+              ...bootstrap.settings.TOOL_ALLOWED_ORIGINS.split(",").filter(
+                Boolean,
+              ),
+              new URL(endpoint).origin,
+            ]),
+          ].join(","),
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  const tool = await page.request.post("/api/tools", {
+    headers,
+    data: { ...receiptTool, endpoint },
+  });
+  expect(tool.status()).toBe(201);
+  receiptToolId = (await tool.json()).id;
+  receiptSource = await receiptRecord(
+    page,
+    `Synthetic receipt fixture ${Date.now()}`,
+  );
+  await page.reload();
+}
 async function signIn(page: Page, fresh = false) {
   if (sessionCookies && !fresh) {
     await page.context().addCookies(sessionCookies);
@@ -25,6 +84,7 @@ async function signIn(page: Page, fresh = false) {
   ).toBeVisible();
   await expect(page).toHaveURL(/\/workflows$/);
   sessionCookies = await page.context().cookies();
+  await prepareReceiptFixture(page);
 }
 async function expectCanvasFillsHeight(page: Page) {
   const canvas = page.getByTestId("workflow-canvas");
@@ -77,7 +137,7 @@ test("administrator builds, publishes and executes the receipt workflow", async 
     .getByRole("dialog")
     .getByRole("textbox", { name: "Name", exact: true })
     .fill("Browser receipt " + Date.now());
-  await page.getByLabel("Start from").selectOption("blank");
+  await expect(page.getByLabel("Creation method")).toHaveValue("blank");
   await page
     .getByRole("button", { name: "Create workflow", exact: true })
     .click();
@@ -90,6 +150,35 @@ test("administrator builds, publishes and executes the receipt workflow", async 
         exact: true,
       })
       .click();
+    if (type === "agent") {
+      await expect(page.getByLabel("Provider", { exact: true })).toHaveValue(
+        "mock",
+      );
+      for (const label of [
+        "Model ID",
+        "System prompt",
+        "User prompt",
+        "Required success tool",
+      ])
+        await expect(page.getByLabel(label, { exact: true })).toHaveValue("");
+      await page
+        .getByLabel("Model ID")
+        .fill(receiptWorkflow.nodes[2].data.model!);
+      await page
+        .getByLabel("System prompt", { exact: true })
+        .fill(receiptWorkflow.nodes[2].data.systemPrompt!);
+      await page
+        .getByLabel("User prompt", { exact: true })
+        .fill(receiptWorkflow.nodes[2].data.userPrompt!);
+    }
+    if (type === "tool") {
+      await expect(page.getByLabel("MCP tool", { exact: true })).toHaveValue(
+        "",
+      );
+      await page
+        .getByLabel("MCP tool", { exact: true })
+        .selectOption(receiptToolId);
+    }
     if (type === "email")
       await page
         .getByLabel("Receiving address")
@@ -431,12 +520,27 @@ async function createReceipt(page: Page, prefix = "Navigation") {
   const name = `${prefix} ${Date.now()}`;
   await page.getByRole("button", { name: "New workflow", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create workflow" });
+  await dialog.getByLabel("Creation method").selectOption("duplicate");
+  await dialog
+    .getByLabel("Workflow to duplicate")
+    .fill(receiptSource.id.slice(0, 8));
+  await page
+    .getByRole("option")
+    .filter({ hasText: receiptSource.id.slice(0, 8) })
+    .click();
   await dialog.getByRole("textbox", { name: "Name", exact: true }).fill(name);
   await dialog
     .getByRole("button", { name: "Create workflow", exact: true })
     .click();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/workflows\/[^/]+$/);
+  await page.locator('.react-flow__node[data-id="email"]').click();
+  await page
+    .getByLabel("Receiving address")
+    .fill(`browser-${page.url().split("/").at(-1)}@example.com`);
+  await page.getByRole("button", { name: "Close settings" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Saved");
   return { name, url: page.url() };
 }
 async function rename(page: Page, name: string) {
@@ -738,12 +842,10 @@ test("desktop and mobile management and run inspector screenshots", async ({
     data: { name: "Screenshot fixture", kind: "api", secret: "synthetic-only" },
   });
   expect(credential.ok()).toBe(true);
-  const created = await page.request.post("/api/workflows", {
-    headers,
-    data: { name: "Screenshot receipt " + Date.now(), template: "receipt" },
-  });
-  expect(created.ok()).toBe(true);
-  const workflow = (await created.json()) as { id: string; draft: Workflow };
+  const workflow = await receiptRecord(
+    page,
+    "Screenshot receipt " + Date.now(),
+  );
   const inbox = workflow.draft.nodes.find((node) => node.type === "email")!;
   inbox.data.recipient = `screenshot-${workflow.id}@example.com`;
   expect(
@@ -814,15 +916,7 @@ test("Outcome editing, stable branches, generated settings and tool actions surv
   page,
 }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "New workflow", exact: true }).click();
-  await page
-    .getByRole("dialog")
-    .getByRole("textbox", { name: "Name", exact: true })
-    .fill("Outcome browser " + Date.now());
-  await page.getByLabel("Start from").selectOption("receipt");
-  await page
-    .getByRole("button", { name: "Create workflow", exact: true })
-    .click();
+  await createReceipt(page, "Outcome browser");
   await expect(page).toHaveURL(/\/workflows\/[^/]+$/);
   const workflowId = page.url().split("/").at(-1)!;
   await page.locator('.react-flow__node[data-id="email"]').click();
@@ -850,7 +944,7 @@ test("Outcome editing, stable branches, generated settings and tool actions surv
   await page.getByLabel("Step name").fill("Submit outcome result");
   await page
     .getByLabel("MCP tool", { exact: true })
-    .selectOption("receipt-tool");
+    .selectOption(receiptToolId);
   await page.getByLabel("Input arguments").fill(
     JSON.stringify({
       merchant: "{{steps.agent.outcome.result}}",
@@ -1011,12 +1105,7 @@ test("Add step Outcome source selection supports keyboard, cancellation and exis
   page,
 }) => {
   await signIn(page);
-  const response = await page.request.post("/api/workflows", {
-    headers: { Origin: new URL(page.url()).origin },
-    data: { name: "Outcome source " + Date.now(), template: "receipt" },
-  });
-  expect(response.ok()).toBe(true);
-  const record = await response.json();
+  const record = await receiptRecord(page, "Outcome source " + Date.now());
   record.draft.nodes.push({
     ...record.draft.nodes[2],
     id: "second",
@@ -1359,12 +1448,10 @@ test("publication returns actionable validation errors for invalid execution gra
 }) => {
   await signIn(page);
   const origin = new URL(page.url()).origin;
-  const created = await page.request.post("/api/workflows", {
-    headers: { Origin: origin },
-    data: { name: "Invalid publication " + Date.now(), template: "receipt" },
-  });
-  expect(created.ok()).toBe(true);
-  const workflow = await created.json();
+  const workflow = await receiptRecord(
+    page,
+    "Invalid publication " + Date.now(),
+  );
   workflow.draft.nodes = workflow.draft.nodes.filter(
     (node: { type: string }) => node.type !== "agent",
   );
@@ -1650,4 +1737,317 @@ test("template editor uploads immutable logos, publishes, compiles, downloads an
   await page.keyboard.press("Escape");
   await expect(drawer).not.toBeVisible();
   await expect(template).toBeFocused();
+});
+
+test("workflow creation API validates blank creation, duplication, authentication and origin", async ({
+  page,
+  request,
+}) => {
+  await signIn(page);
+  const headers = { Origin: new URL(page.url()).origin };
+  expect(
+    (
+      await request.post("/api/workflows", {
+        headers,
+        data: { name: "Unauthorized" },
+      })
+    ).status(),
+  ).toBe(401);
+  expect(
+    (
+      await page.request.post("/api/workflows", {
+        headers: { Origin: "https://foreign.example" },
+        data: { name: "Wrong origin" },
+      })
+    ).status(),
+  ).toBe(403);
+  for (const data of [
+    {},
+    { name: "" },
+    { name: " " },
+    { name: "x".repeat(101) },
+    { name: "Bad", duplicateFromWorkflowId: "" },
+    { name: "Bad", duplicateFromWorkflowId: null },
+    { name: "Bad", duplicateFromWorkflowId: 42 },
+    { name: "Bad", duplicateFromWorkflowId: "x".repeat(101) },
+  ]) {
+    expect(
+      (await page.request.post("/api/workflows", { headers, data })).status(),
+    ).toBe(400);
+  }
+  for (const template of ["receipt", "blank", null]) {
+    const response = await page.request.post("/api/workflows", {
+      headers,
+      data: { name: "Old client", template },
+    });
+    expect(response.status()).toBe(400);
+    expect((await response.json()).error).toContain("duplicateFromWorkflowId");
+  }
+  expect(
+    (
+      await page.request.post("/api/workflows", {
+        headers,
+        data: {
+          name: "Missing source",
+          duplicateFromWorkflowId: "missing-source",
+        },
+      })
+    ).status(),
+  ).toBe(404);
+  const response = await page.request.post("/api/workflows", {
+    headers,
+    data: { name: "API blank" },
+  });
+  expect(response.status()).toBe(201);
+  const blank = await response.json();
+  expect(blank).toEqual({
+    id: expect.any(String),
+    draft: { name: "API blank", nodes: [], edges: [] },
+  });
+  const duplicate = await page.request.post("/api/workflows", {
+    headers,
+    data: { name: "API duplicate", duplicateFromWorkflowId: receiptSource.id },
+  });
+  expect(duplicate.status()).toBe(201);
+  const copy = await duplicate.json();
+  expect(Object.keys(copy).sort()).toEqual(["draft", "id"]);
+  const expected = structuredClone(receiptSource.draft);
+  expected.name = "API duplicate";
+  expected.nodes[0].data.recipient = "";
+  expect(copy.draft).toEqual(expected);
+  const bootstrap = await (await page.request.get("/api/bootstrap")).json();
+  expect(
+    bootstrap.workflows.find(
+      (workflow: { id: string }) => workflow.id === copy.id,
+    ).published_version,
+  ).toBeNull();
+});
+
+test("creation dialog defaults to blank, disables duplication without sources and restores mobile focus", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.route("**/api/bootstrap", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      json: { ...(await response.json()), workflows: [] },
+    });
+  });
+  await page.reload();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const trigger = page.getByRole("button", {
+    name: "New workflow",
+    exact: true,
+  });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Create workflow" });
+  await expect(
+    dialog.getByRole("textbox", { name: "Name", exact: true }),
+  ).toHaveValue("My workflow");
+  await expect(
+    dialog.getByRole("textbox", { name: "Name", exact: true }),
+  ).toBeFocused();
+  await expect(dialog.getByLabel("Creation method")).toHaveValue("blank");
+  await expect(
+    dialog.getByRole("option", { name: "Duplicate existing" }),
+  ).toBeDisabled();
+  await expect(dialog.getByLabel("Workflow to duplicate")).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await page.unroute("**/api/bootstrap");
+  await trigger.click();
+  await dialog
+    .getByRole("button", { name: "Create workflow", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/workflows\/[^/]+$/);
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "My workflow", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
+});
+
+test("duplicate picker searches saved drafts, suggests names, preserves manual names and retains submission errors", async ({
+  page,
+}) => {
+  await signIn(page);
+  const name = "Duplicate search " + Date.now();
+  const unpublished = await receiptRecord(page, name);
+  const published = await receiptRecord(page, name);
+  const long = await receiptRecord(page, "L".repeat(100));
+  const headers = { Origin: new URL(page.url()).origin };
+  expect(
+    (
+      await page.request.post(`/api/workflows/${published.id}/publish`, {
+        headers,
+      })
+    ).ok(),
+  ).toBe(true);
+  await page.reload();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const trigger = page.getByRole("button", {
+    name: "New workflow",
+    exact: true,
+  });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Create workflow" });
+  const method = dialog.getByLabel("Creation method");
+  const field = dialog.getByRole("textbox", { name: "Name", exact: true });
+  await method.selectOption("duplicate");
+  await dialog
+    .getByRole("button", { name: "Create workflow", exact: true })
+    .click();
+  await expect(
+    dialog.getByText("Choose a workflow", { exact: true }),
+  ).toBeVisible();
+  const picker = dialog.getByLabel("Workflow to duplicate");
+  await picker.fill(name);
+  await expect(page.getByRole("option").filter({ hasText: name })).toHaveCount(
+    2,
+  );
+  await expect(
+    page
+      .getByRole("option")
+      .filter({ hasText: `fixture-${published.id}@example.com` }),
+  ).toBeVisible();
+  await page
+    .getByRole("option")
+    .filter({ hasText: unpublished.id.slice(0, 8) })
+    .click();
+  await expect(field).toHaveValue(`Copy of ${name}`);
+  await picker.fill(long.id.slice(0, 8));
+  await page
+    .getByRole("option")
+    .filter({ hasText: long.id.slice(0, 8) })
+    .click();
+  await expect(field).toHaveValue(("Copy of " + long.draft.name).slice(0, 100));
+  await field.fill("Manual copy");
+  await method.selectOption("blank");
+  await method.selectOption("duplicate");
+  await picker.fill(published.id.slice(0, 8));
+  await page
+    .getByRole("option")
+    .filter({ hasText: published.id.slice(0, 8) })
+    .click();
+  await expect(field).toHaveValue("Manual copy");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  let attempts = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/workflows", async (route) => {
+    attempts++;
+    await gate;
+    await route.fulfill({
+      status: 404,
+      json: {
+        error:
+          "Source workflow not found. Choose another workflow to duplicate.",
+      },
+    });
+  });
+  const submit = dialog.getByRole("button", {
+    name: "Create workflow",
+    exact: true,
+  });
+  await submit.click();
+  await expect(submit).toBeDisabled();
+  await expect(picker).toBeDisabled();
+  await page.keyboard.press("Enter");
+  release();
+  await expect(dialog.getByRole("alert")).toContainText(
+    "Choose another workflow",
+  );
+  expect(attempts).toBe(1);
+  await expect(field).toHaveValue("Manual copy");
+  await page.unroute("**/api/workflows");
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await expect(field).toHaveValue("My workflow");
+  await expect(method).toHaveValue("blank");
+  await method.selectOption("duplicate");
+  await picker.fill(unpublished.id.slice(0, 8));
+  await page
+    .getByRole("option")
+    .filter({ hasText: unpublished.id.slice(0, 8) })
+    .click();
+  await submit.click();
+  await expect(page).toHaveURL(/\/workflows\/[^/]+$/);
+  await expect(
+    page.getByRole("heading", { name: `Copy of ${name}`, exact: true }),
+  ).toBeVisible();
+  await page.locator('.react-flow__node[data-id="email"]').click();
+  await expect(page.getByLabel("Receiving address")).toHaveValue("");
+  await page.keyboard.press("Escape");
+  await page.reload();
+  await expect(page.locator(".react-flow__node")).toHaveCount(4);
+});
+
+test("duplication excludes unsaved edits and preserves the source draft", async ({
+  page,
+}) => {
+  await signIn(page);
+  const source = await createReceipt(page, "Saved source");
+  const sourceId = source.url.split("/").at(-1)!;
+  await rename(page, "Unsaved source name");
+  await page
+    .getByRole("banner")
+    .getByRole("link", { name: "Workflows", exact: true })
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "Unsaved changes", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Stay", exact: true }).click();
+  // Browser history preserves drafts in the authenticated layout.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/workflows$/);
+
+  await page.getByRole("button", { name: "New workflow", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create workflow" });
+  await dialog.getByLabel("Creation method").selectOption("duplicate");
+  await dialog.getByLabel("Workflow to duplicate").fill(sourceId.slice(0, 8));
+  await page
+    .getByRole("option")
+    .filter({ hasText: sourceId.slice(0, 8) })
+    .click();
+  await expect(
+    dialog.getByRole("textbox", { name: "Name", exact: true }),
+  ).toHaveValue(`Copy of ${source.name}`);
+  await expect(dialog).toContainText("excluding unsaved changes");
+  await dialog
+    .getByRole("button", { name: "Create workflow", exact: true })
+    .click();
+  const bootstrap = await (await page.request.get("/api/bootstrap")).json();
+  expect(
+    bootstrap.workflows.find(
+      (workflow: { id: string }) => workflow.id === sourceId,
+    ).draft.name,
+  ).toBe(source.name);
+  await expect(
+    page.getByRole("heading", { name: `Copy of ${source.name}`, exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".react-flow__node")).toHaveCount(4);
+  await page
+    .getByRole("banner")
+    .getByRole("link", { name: "Workflows", exact: true })
+    .click();
+  await page.getByRole("link", { name: source.name, exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Unsaved source name", exact: true }),
+  ).toBeVisible();
 });

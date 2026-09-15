@@ -1,11 +1,10 @@
+import { receiptWorkflow, receiptTool } from "../fixtures/receipt-workflow";
 import {
   defaultPdfTemplate,
   templateTool,
 } from "../packages/contracts/src/pdf-templates";
 import { expect, it, vi } from "vitest";
 import {
-  receiptWorkflow,
-  receiptTool,
   validateWorkflow,
   workflowSchema,
   completionTool,

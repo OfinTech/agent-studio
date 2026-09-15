@@ -57,7 +57,7 @@ services:
       DATABASE_URL: postgres://platform:platform@db:5432/platform
       ATTACHMENT_DIR: /data/attachments
       MOCK_API_URL: http://mock-api:4010/receipts
-    command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
+    command: ["pnpm", "db:migrate"]
     depends_on:
       db: { condition: service_healthy }
   web:

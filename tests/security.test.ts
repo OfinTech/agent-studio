@@ -1,3 +1,4 @@
+import { receiptTool } from "../fixtures/receipt-workflow";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
@@ -13,10 +14,7 @@ import {
   createToolSession,
   validateTool,
 } from "../packages/mcp/src/index";
-import {
-  receiptTool,
-  type ToolDefinition,
-} from "../packages/contracts/src/index";
+import { type ToolDefinition } from "../packages/contracts/src/index";
 import { validateAttachment } from "../packages/connectors/src/storage";
 import { verifyWebhook } from "../packages/connectors/src/index";
 import { Webhook } from "svix";

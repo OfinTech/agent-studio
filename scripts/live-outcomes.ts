@@ -1,3 +1,4 @@
+import { receiptWorkflow } from "../fixtures/receipt-workflow";
 // Opt-in real providers, synthetic input, and a controlled local action endpoint.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -5,7 +6,6 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import {
   addOutcome,
-  receiptWorkflow,
   type ToolDefinition,
 } from "../packages/contracts/src/index";
 import { query, pool } from "../packages/persistence/src/index";

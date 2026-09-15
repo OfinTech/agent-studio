@@ -32,7 +32,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm setup:local
-      - run: pnpm db:migrate && pnpm db:seed
+      - run: pnpm db:migrate
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck

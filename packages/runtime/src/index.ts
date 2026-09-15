@@ -38,6 +38,8 @@ import {
 } from "../../providers/src/index";
 import { durableToolSession, type ToolDispatch } from "./tool-execution";
 export {
+  createWorkflow,
+  WorkflowNotFoundError,
   publish,
   ingest,
   testRun,

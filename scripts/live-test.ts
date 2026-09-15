@@ -5,9 +5,13 @@ if (process.env.RUN_LIVE !== "1") {
   );
   process.exit(0);
 }
+if (!process.env.LIVE_WORKFLOW_ID)
+  throw new Error(
+    "Set LIVE_WORKFLOW_ID to an explicitly configured, published Gemini receipt workflow",
+  );
 const [workflow] = await query(
   "SELECT w.*,v.snapshot FROM workflows w JOIN versions v ON v.id=w.published_version WHERE w.id=$1",
-  [process.env.LIVE_WORKFLOW_ID ?? "receipt-example"],
+  [process.env.LIVE_WORKFLOW_ID],
 );
 if (
   !workflow ||

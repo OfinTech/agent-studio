@@ -1,6 +1,7 @@
+import { receiptTool, receiptWorkflow } from "../fixtures/receipt-workflow";
 import { it, expect, vi } from "vitest";
 import { GeminiProvider } from "../packages/providers/src/index";
-import { receiptTool, receiptWorkflow } from "../packages/contracts/src/index";
+
 it("tracks uploaded files before readiness failure and supports cleanup", async () => {
   const provider = new GeminiProvider("synthetic-key");
   const remove = vi.fn().mockResolvedValue({});

@@ -6,7 +6,6 @@ import {
 } from "../../../packages/contracts/src/pdf-templates";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  receiptWorkflow,
   addOutcome as attachOutcome,
   type Workflow,
   type WorkflowNode,
@@ -207,23 +206,48 @@ export function usePlatform() {
       return { ...previous, [id]: { draft: snapshot, dirty: false } };
     });
   }
-  function addNode(type: WorkflowNode["type"]) {
+  function addNode(type: Exclude<WorkflowNode["type"], "outcome">) {
     if (!draft) return;
-    const base: WorkflowNode = receiptWorkflow.nodes.find(
-      (n) => n.type === type,
-    ) ?? {
+    const defaults: Record<typeof type, WorkflowNode["data"]> = {
+      email: { label: "Email", recipient: "" },
+      upload: {
+        label: "Upload attachments",
+        mimeTypes: ["application/pdf", "image/jpeg", "image/png"],
+      },
+      agent: {
+        label: "Agent",
+        provider: "mock",
+        model: "",
+        systemPrompt: "",
+        userPrompt: "",
+        temperature: 0.1,
+        maxOutputTokens: 4096,
+      },
+      tool: { label: "MCP tool" },
+      pdf_template: {
+        label: "PDF template",
+        pdfTemplate: structuredClone(defaultPdfTemplate),
+      },
+      send_email: {
+        label: "Send email",
+        subjectTemplate: "",
+        bodyTemplate: "",
+      },
+      action: { label: "Tool action", arguments: {} },
+    };
+    const positions: Partial<
+      Record<WorkflowNode["type"], WorkflowNode["position"]>
+    > = {
+      email: { x: 70, y: 150 },
+      upload: { x: 380, y: 150 },
+      agent: { x: 690, y: 150 },
+      tool: { x: 690, y: 390 },
+    };
+    const base: WorkflowNode = {
       id: type,
       type,
-      position: { x: 1000, y: 150 },
-      data:
-        type === "pdf_template"
-          ? {
-              label: "PDF template",
-              pdfTemplate: structuredClone(defaultPdfTemplate),
-            }
-          : type === "send_email"
-            ? { label: "Send email", subjectTemplate: "", bodyTemplate: "" }
-            : { label: "Tool action", arguments: {} },
+      position: positions[type] ?? { x: 1000, y: 150 },
+      data: defaults[type],
     };
     const id = draft.nodes.some((n) => n.id === type)
       ? type + "-" + crypto.randomUUID()

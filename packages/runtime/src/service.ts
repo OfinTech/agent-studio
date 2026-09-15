@@ -1,5 +1,8 @@
 import { TEMPLATE_PROFILE } from "../../contracts/src/pdf-templates";
-import { validateTemplateResources } from "./template-resources";
+import {
+  copyTemplateResources,
+  validateTemplateResources,
+} from "./template-resources";
 import { TemplateResourceStorage } from "../../connectors/src/template-resources";
 import { REPORT_PROFILE } from "../../contracts/src/reports";
 import { ReportStorage } from "../../connectors/src/reports";
@@ -21,6 +24,47 @@ import {
 import { validateTool } from "../../mcp/src/index";
 import { inboundSchema, syntheticEmail } from "../../connectors/src/index";
 export const QUEUE = "workflow-runs";
+export class WorkflowNotFoundError extends ConfigurationError {}
+
+export async function createWorkflow(
+  name: string,
+  duplicateFromWorkflowId?: string,
+) {
+  return transaction(async (client) => {
+    let draft: Workflow = { name, nodes: [], edges: [] };
+    if (duplicateFromWorkflowId !== undefined) {
+      // Saves, deletion, uploads and resource maintenance take this same lock.
+      const {
+        rows: [source],
+      } = await client.query(
+        "SELECT draft FROM workflows WHERE id=$1 FOR UPDATE",
+        [duplicateFromWorkflowId],
+      );
+      if (!source)
+        throw new WorkflowNotFoundError(
+          "Source workflow not found. Choose another workflow to duplicate.",
+        );
+      draft = workflowSchema.parse(source.draft);
+      draft.name = name;
+      for (const node of draft.nodes)
+        if (node.type === "email") node.data.recipient = "";
+    }
+    draft = workflowSchema.parse(draft);
+    const id = randomUUID();
+    await client.query("INSERT INTO workflows(id,draft) VALUES($1,$2)", [
+      id,
+      JSON.stringify(draft),
+    ]);
+    if (duplicateFromWorkflowId !== undefined) {
+      await copyTemplateResources(duplicateFromWorkflowId, id, draft, client);
+      await client.query("UPDATE workflows SET draft=$2 WHERE id=$1", [
+        id,
+        JSON.stringify(draft),
+      ]);
+    }
+    return { id, draft };
+  });
+}
 let bossPromise: Promise<PgBoss> | undefined;
 export function getBoss() {
   return (bossPromise ??= (async () => {

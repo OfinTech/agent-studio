@@ -49,6 +49,39 @@ export async function validateTemplateResources(
         await readTemplateResource(workflowId, image, client);
     }
 }
+// Caller holds the source workflow lock until the copy commits. Files left by
+// a rollback or interrupted transaction are reclaimed by orphan maintenance.
+export async function copyTemplateResources(
+  sourceId: string,
+  destinationId: string,
+  workflow: Workflow,
+  client: PoolClient,
+) {
+  const copies = new Map<string, ImageResource>();
+  const storage = new TemplateResourceStorage();
+  for (const node of workflow.nodes) {
+    if (!node.data.pdfTemplate) continue;
+    const images = imageResourcesSchema.parse(node.data.pdfTemplate.images);
+    const remapped: ImageResource[] = [];
+    for (const image of images) {
+      // Validate even repeated references so mismatched metadata cannot hide
+      // behind a previously copied ID.
+      const bytes = await readTemplateResource(sourceId, image, client);
+      let copy = copies.get(image.id);
+      if (!copy) {
+        copy = { ...image, id: randomUUID() };
+        await storage.put(copy.id, bytes);
+        await client.query(
+          "INSERT INTO template_resources(id,workflow_id,metadata) VALUES($1,$2,$3)",
+          [copy.id, destinationId, JSON.stringify(copy)],
+        );
+        copies.set(image.id, copy);
+      }
+      remapped.push(copy);
+    }
+    node.data.pdfTemplate.images = remapped;
+  }
+}
 export async function uploadTemplateResource(
   workflowId: string,
   filename: string,

@@ -4,7 +4,7 @@ Source: [OfinTech/agent-studio](https://github.com/OfinTech/agent-studio).
 
 A self-hostable visual builder for email-triggered agents. Connect Gemini, Claude, or OpenAI credentials, define tools from your APIs, and configure task outcomes and follow-up actions.
 
-**Receipt email → attachment upload → Gemini agent → MCP tool → client API**
+**Email → attachment upload → Agent → tools and follow-up actions**
 
 TypeScript · Next.js · Mantine · React Flow · PostgreSQL · pg-boss · Apache-2.0
 
@@ -19,7 +19,7 @@ pnpm setup:local
 docker compose up --build -d
 ```
 
-Open http://localhost:3000 and sign in as `admin@example.com` with the generated password. Open **Receipt intake**, click **Publish**, then **Test run**. The seeded workflow uses a deterministic mock provider and a persistent mock accounting API; no external credentials are needed. The inspector shows the uploaded PDF, extracted fields, MCP call, and successful API response.
+Open http://localhost:3000 and sign in as `admin@example.com` with the generated password. Choose **New workflow**, enter a name, and create a **Blank canvas**. Setup creates no example workflows, tools, or example-specific allowlist settings. Existing records and published versions are preserved.
 
 `setup:local` creates a private `.env` with independent encryption and session keys. It never overwrites an existing environment. To reset the password, run `pnpm exec tsx scripts/reset-password.ts`, save its output, then restart web. This also invalidates existing sessions.
 
@@ -28,7 +28,6 @@ For development with hot reload:
 ```sh
 docker compose up -d db
 pnpm db:migrate
-pnpm db:seed
 pnpm mock-api   # terminal 1, localhost:4010
 pnpm worker     # terminal 2
 pnpm dev        # terminal 3, localhost:3000
@@ -38,7 +37,13 @@ If port 3000 is occupied, set both `PORT=3100` and `APP_URL=http://localhost:310
 
 ## Build a workflow
 
-After signing in, choose a workflow from `/workflows` or use **New workflow** to create a blank workflow or receipt example. Each editor has its own `/workflows/[id]` URL. Use **Add step** to add **Email**, **Upload**, and **Agent** nodes; connect their side handles in that order. Add MCP tool nodes and connect their purple handles to the Agent's bottom handle. Click a node to configure it. Execution starts with one Email → Upload → Agent path, followed by sequential agents, Tool actions, and optional Outcome branches. MCP tool attachments grant capabilities to their connected agent; Tool actions execute a configured tool deterministically. Cycles, parallel execution, and branch joins are not supported.
+After signing in, choose a workflow from `/workflows` or use **New workflow** to choose **Blank canvas** (default, named **My workflow**) or **Duplicate existing**. Duplication offers a searchable list of published and unpublished workflows, identified by receiving address or ID. It suggests **Copy of [source name]** while preserving a name you entered manually. Each editor has its own `/workflows/[id]` URL. Use **Add step** to add **Email**, **Upload**, and **Agent** nodes; connect their side handles in that order. Add MCP tool nodes and connect their purple handles to the Agent's bottom handle. Click a node to configure it. Execution starts with one Email → Upload → Agent path, followed by sequential agents, Tool actions, and optional Outcome branches. MCP tool attachments grant capabilities to their connected agent; Tool actions execute a configured tool deterministically. Cycles, parallel execution, and branch joins are not supported.
+
+Duplication copies the latest saved draft, excluding unsaved edits. It preserves node/edge/state IDs, positions, prompts, settings, and shared tool/credential references. PDF template images receive independent immutable copies, so source edits or deletion cannot break the duplicate. The copy starts unpublished with empty Email receiving addresses; configure a unique address before publishing. Versions, runs, reports, email history, and browser canvas state are excluded.
+
+New Agent blocks select Mock with empty model and prompts; configure these before publishing. Email blocks start with no receiving address, and tool blocks start with no selected tool.
+
+Authenticated clients can create workflows with `POST /api/workflows` using `{ "name": "My workflow" }` or `{ "name": "Copy", "duplicateFromWorkflowId": "source-id" }`. Both return `201 { id, draft }`. The old `template` parameter is rejected with migration guidance. A missing source returns 404. Saving, publishing, and testing use the existing authenticated API and same-origin requirements.
 
 Use **Workflow settings** to rename a workflow; **Apply** changes the draft and **Save** persists it. Drafts and canvas state survive application navigation and browser Back/Forward within the session. Links leaving an edited workflow offer **Save and leave**, **Discard and leave**, or **Stay**. Reloading or closing a tab uses the browser unsaved-change warning. Drafts are saved explicitly. Publishing validates the graph, credentials, destinations, schemas, and prompts, then creates an immutable version containing the workflow and tool definitions. Editing a draft or a tool never changes an existing version. Each receiving address can belong to one published workflow. Publishing again replaces the live version. **Delete workflow** in Workflow settings removes the workflow, its published version, and its run history once no run is active. **Test run** uses the latest published version and a generated, valid receipt PDF.
 
@@ -113,13 +118,13 @@ flowchart LR
 | ------------------------------ | ------------------------------------------------------------------------------------ |
 | `apps/web`                     | Authenticated App Router API, React Flow editor, credentials/tools UI, run inspector |
 | `apps/worker`                  | Durable job consumer, heartbeat, outbox recovery, cleanup                            |
-| `packages/contracts`           | Validated graph/tool contracts, prompt substitution, receipt example                 |
+| `packages/contracts`           | Validated graph/tool contracts and prompt substitution                               |
 | `packages/persistence`         | Drizzle schema/migrations, PostgreSQL transactions, AES-256-GCM credentials          |
 | `packages/providers`           | Provider interface, Gemini / OpenAI / Claude adapters, deterministic mock            |
 | `packages/connectors`          | Resend signature verification/retrieval, bounded HTTP, storage interface             |
 | `packages/mcp`                 | Official SDK internal server/client, JSON Schema validation, generated HTTP tools    |
 | `packages/runtime`             | Publication, ingestion, checkpoints, tool call ledger, recovery                      |
-| `scripts`, `fixtures`, `tests` | Setup/seed, mock API, synthetic receipt, unit/integration/browser/live checks        |
+| `scripts`, `fixtures`, `tests` | Setup, mock API, synthetic receipt, unit/integration/browser/live checks             |
 
 Signed webhooks persist the email event, original published version, run, and queue outbox in one transaction. A delivery is acknowledged only after queue dispatch; queue outages leave the outbox durable and return a retryable response. Provider email IDs deduplicate concurrent deliveries, including deliveries retried after a workflow is republished. Unmatched signed email events are recorded without starting a run.
 
@@ -143,10 +148,12 @@ pnpm build
 
 Integration tests create and drop an isolated temporary database using `TEST_DATABASE_URL` or `DATABASE_URL`; the test role needs permission to create databases. They never truncate the development database. Browser tests add uniquely named workflows and synthetic credentials to the development instance and run the mock receipt through the actual queue and worker.
 
-The opt-in live check waits for a real Resend email and asserts that the published Gemini workflow calls `submit_receipt` successfully:
+Receipt workflows and tools live in `fixtures/receipt-workflow.ts` for explicit synthetic verification. Browser and smoke checks create their own prerequisites; setup does not seed them. `pnpm db:seed` remains a compatibility no-op.
+
+Configure and publish a Gemini receipt workflow, including its `submit_receipt` tool, credential, model, prompts, unique receiving address, and allowed tool origin before running the live check. The opt-in live check waits for a real Resend email and asserts that the published Gemini workflow calls `submit_receipt` successfully:
 
 ```sh
-RUN_LIVE=1 LIVE_WORKFLOW_ID=receipt-example pnpm test:live
+RUN_LIVE=1 LIVE_WORKFLOW_ID=your-configured-workflow-id pnpm test:live
 # Send a real receipt to the configured address while this command waits.
 ```
 

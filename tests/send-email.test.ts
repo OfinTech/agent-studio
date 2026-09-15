@@ -1,3 +1,4 @@
+import { receiptWorkflow, receiptTool } from "../fixtures/receipt-workflow";
 import { readFileSync } from "node:fs";
 import {
   retrieveEmail,
@@ -8,8 +9,6 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   addOutcome,
   canConnect,
-  receiptWorkflow,
-  receiptTool,
   validateWorkflow,
   workflowSchema,
   type WorkflowNode,
