@@ -70,7 +70,7 @@ Add a **Tool action**, choose an existing MCP tool, and configure **Input argume
 
 References may use email fields and outputs of earlier nodes on the current path. Agent outputs expose `text`, `turns`, and, when configured, `outcome.state`, `outcome.name`, `outcome.reason`, and `outcome.result`. Action outputs expose the tool result envelope (`ok`, `data`). Use actual node IDs. A whole-value reference such as `"{{steps.action.data.total}}"` preserves numbers, objects, arrays, booleans, and null. Embedded references such as `"Total: {{steps.action.data.total}}"` interpolate text once without evaluating code. Unknown, inherited, forward, and sibling-branch references are rejected. Resolved arguments must pass the published tool’s JSON Schema before dispatch.
 
-The accepted report, selected next node, and durable cursor commit atomically before the branch runs. Every agent gets its own prompts, conversation, attached tool scope, attachment inputs, and ten-turn allowance. Earlier results enter prompts only through explicit references. The five-minute deadline covers the entire run, including retries. A reported Failure can still produce a **succeeded** execution when its selected branch completes. The inspector shows reported outcome, reason, result, selected branch, execution status, node-associated calls, and unexecuted branches.
+The accepted report, selected next node, and durable cursor commit atomically before the branch runs. Every agent gets its own prompts, conversation, attached tool scope, attachment inputs, and ten-turn allowance. Earlier results enter prompts only through explicit references. The workflow execution time (1–10 minutes, default five) covers the entire run, including retries. A reported Failure can still produce a **succeeded** execution when its selected branch completes. The inspector shows reported outcome, reason, result, selected branch, execution status, node-associated calls, and unexecuted branches.
 
 ## Provider setup
 
@@ -128,7 +128,7 @@ flowchart LR
 
 Signed webhooks persist the email event, original published version, run, and queue outbox in one transaction. A delivery is acknowledged only after queue dispatch; queue outages leave the outbox durable and return a retryable response. Provider email IDs deduplicate concurrent deliveries, including deliveries retried after a workflow is republished. Unmatched signed email events are recorded without starting a run.
 
-Workers acquire a PostgreSQL advisory lock per run. Model messages (including Gemini thought signatures), pending tool calls, and upload progress are checkpointed. A durable ledger caches completed calls and supplies stable per-call idempotency keys. pg-boss retries transient failures with backoff, heartbeats detect lost workers, and resumed execution reuses checkpoints. An unconfirmed non-idempotent write is held for review. Default execution limits are ten model turns per agent, ten calls per turn, and five minutes of wall time from first execution, including retries.
+Workers acquire a PostgreSQL advisory lock per run. Model messages (including Gemini thought signatures), pending tool calls, and upload progress are checkpointed. A durable ledger caches completed calls and supplies stable per-call idempotency keys. pg-boss retries transient failures with backoff, heartbeats detect lost workers, and resumed execution reuses checkpoints. An unconfirmed non-idempotent write is held for review. Default execution limits are ten model turns per agent, ten calls per turn, and the configured execution time from first execution, including retries (five minutes by default).
 
 Checkpoint JSON is versioned (v2) with a durable cursor, per-node state, and prior outputs. Legacy single-agent checkpoints decode into that format and retain their original tool-call identities. Migration `0002_node_attribution` adds nullable `node_id` to the call ledger; legacy records remain readable. Published snapshots are never rewritten. New call identities include run and node IDs, so identical calls in different nodes remain independent. Completed calls recover from the ledger; an unresolved write cannot be bypassed.
 
@@ -197,7 +197,7 @@ Editor **Test run** renders **Preview only** without sending or needing a Resend
 
 The additive `email_sends` ledger freezes the resolved message before dispatch. Run/node identities produce deterministic idempotency keys. Acceptance, step output, and checkpoint cursor commit together; checkpoint version 2 and older decoding remain supported. Retries reuse the frozen message, and stop at least one minute before [Resend's 24-hour idempotency window](https://resend.com/docs/dashboard/emails/idempotency-keys) expires. Uncertain writes at the execution deadline or after a nonretryable failure require review. Check Resend before starting another run for the same email. **Accepted by Resend** means provider acceptance, not confirmed inbox delivery; a completed Failure branch is technically successful.
 
-The inspector displays the resolved sender, recipient, subject/body, delivery mode, acceptance ID, and errors. Unselected branches remain **Not executed**.
+The inspector displays the resolved sender, recipient, subject/body, delivery mode, acceptance ID, and errors. Unselected terminal branches show **Not run**.
 
 For opt-in live verification, publish a controlled workflow with at least two Outcome branches ending in distinct email steps, configure a real provider, and use a controlled sender inbox and a verified Resend sending domain:
 
@@ -213,3 +213,21 @@ This observer verifies a real inbound run, reply headers, Resend acceptance, and
 Agents can opt into **Generate PDF reports** and compile LaTeX with the built-in `generate_pdf` tool. In Send email, select **Attach PDF report from** to attach one earlier Agent's report. Outcome remains optional. Test runs generate real PDFs and preview attachments without dispatching email.
 
 Start the compiler for native development with `docker compose --profile native up --build -d pdf-compiler pdf-local-worker`; container workers connect through a private internal network. See [PDF reports](docs/pdf-reports.md) for supported packages, limits, durable recovery, retention, deployment and synthetic/live verification.
+
+## Runtime deadlines and system-error notices
+
+**Workflow settings → Execution time (minutes)** accepts 1–10 minutes (default five). Apply changes the draft; Save and Publish remain explicit. The absolute deadline is persisted when execution starts and is retained across the queue's maximum three retries. Exhausted or terminal queue jobs are reconciled under the run lock. Completed actions and terminal checkpoints remain authoritative; unfinished steps become failed or need review with their run.
+
+Claude uses the official [streaming helper](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/typescript#streaming-helpers), with SDK retries disabled. Each request has up to 180 seconds, bounded by the remaining execution time. Only complete messages and complete tool arguments are checkpointed or dispatched. Interrupted streams retry inference through the durable queue. Logs contain request IDs, duration and controlled status, without request content or raw upstream errors.
+
+**Upload → Require attachments** defaults to enabled. Disable it to pass an email-only brief to the Agent with upload count zero. Supplied files still undergo type, size and content validation. Receipt Agent continues to require attachments; Report Agent uses optional attachments and a ten-minute budget.
+
+**Email → Send system-error notices** defaults to enabled, including older published versions where the optional field is absent. Definitive runtime failures can create a separate plain-text reply from the published receiving address to the original sender. The notice uses fixed text, a safe explanation, a suggested next step and the run ID, with reply-thread headers and no PDF. A model-selected Failure is still a normal workflow Outcome and creates no additional system notice.
+
+The reply envelope is validated and saved before attachment processing. Notices are suppressed for missing/invalid reply envelopes, automatic messages, self-replies, uncertain external writes, disabled settings, non-Email entry points, and an ordinary reply already sent or attempted. The inspector shows the suppression reason or notice preview, acceptance ID, delivery failure, or uncertain delivery separately from email steps. Acceptance means Resend accepted the request, not confirmed inbox delivery.
+
+A unique per-run ledger and separate durable queue freeze the notice and sending key. Transient delivery failures have at most three retries; unresolved acceptance becomes **needs review**. Notice delivery cannot change the original failed run or generate another notice. Test runs preview notices without calling the email sending API.
+
+Migration `0009_runtime_notices` is additive. It preserves existing published JSON, adds deadlines and queue associations, and suppresses notices for executions already present during the upgrade. Maintenance never creates retrospective notices for historical failures. Run/workflow deletion includes the notice ledger.
+
+`RUN_LIVE_REPORT_RUNTIME=1 REPORT_WORKFLOW_ID=... pnpm exec tsx scripts/report-runtime-preview.ts` runs inside the deployed web container. It duplicates the Report Agent into temporary workflows, checks a long email-only report using its live provider and branded template, checks a definitive provider rejection with a notice preview, verifies zero sending attempts, and removes the temporary workflows. This does not replace the documented live inbound/receipt/Outcome/email checks.

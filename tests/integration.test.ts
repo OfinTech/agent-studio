@@ -1275,7 +1275,7 @@ suite("PostgreSQL execution and recovery", () => {
         }),
       ).rejects.toThrow();
       await persistence.query(
-        "UPDATE runs SET started_at=now()-interval '7 minutes' WHERE id=$1",
+        "UPDATE runs SET started_at=now()-interval '7 minutes',deadline_at=now()-interval '1 minute' WHERE id=$1",
         [run.id],
       );
       if (method === "execute") await runtime.executeRun(run.id);
@@ -1445,7 +1445,7 @@ suite("PostgreSQL execution and recovery", () => {
         }),
       ).rejects.toThrow();
       await persistence.query(
-        "UPDATE runs SET started_at=now()-interval '7 minutes' WHERE id=$1",
+        "UPDATE runs SET started_at=now()-interval '7 minutes',deadline_at=now()-interval '1 minute' WHERE id=$1",
         [run.id],
       );
       if (method === "execute")
@@ -2579,5 +2579,415 @@ suite("PostgreSQL execution and recovery", () => {
       "Three distinct",
     );
     expect(compile).toHaveBeenCalledTimes(3);
+  });
+  const notices = async (runId: string) =>
+    persistence.query("SELECT * FROM system_notices WHERE run_id=$1", [runId]);
+  async function failProvider(runId: string, retryCount = 3) {
+    const provider = new MockProvider();
+    provider.infer = async () => {
+      throw new NetworkError(
+        "Provider Claude request timed out after 180 seconds",
+        false,
+        true,
+      );
+    };
+    return runtime.executeRun(runId, {
+      provider,
+      attempt: { retryCount, retryLimit: 3 },
+    });
+  }
+  it("exhausts the final retry promptly, finalizes all active steps, and freezes one preview notice", async () => {
+    const w = await workflow(),
+      run = await runFor(w.version.id);
+    await persistence.query(
+      "UPDATE emails SET raw='{\"test\":true}' WHERE id=$1",
+      [run.email.id],
+    );
+    await expect(failProvider(run.id, 0)).rejects.toThrow();
+    expect((await status(run.id)).status).toBe("queued");
+    expect(await notices(run.id)).toHaveLength(0);
+    const deadline = (await status(run.id)).deadline_at;
+    await failProvider(run.id);
+    expect(await status(run.id)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Retry limit exhausted"),
+      deadline_at: deadline,
+    });
+    expect(
+      await persistence.query(
+        "SELECT status FROM steps WHERE run_id=$1 ORDER BY node_id",
+        [run.id],
+      ),
+    ).toEqual([
+      { status: "failed" },
+      { status: "succeeded" },
+      { status: "succeeded" },
+    ]);
+    expect(await notices(run.id)).toMatchObject([
+      {
+        status: "preview",
+        mode: "preview",
+        attempts: 0,
+        message: {
+          from: w.draft.nodes[0].data.recipient,
+          to: [run.email.from],
+          text: expect.stringContaining(run.id),
+        },
+      },
+    ]);
+    const { executeSystemNotice } =
+      await import("../packages/runtime/src/system-notices");
+    const send = vi.fn();
+    await executeSystemNotice(run.id, {}, send);
+    await runtime.executeRun(run.id);
+    expect(send).not.toHaveBeenCalled();
+    expect(await notices(run.id)).toHaveLength(1);
+  });
+  it("persists a ten-minute absolute deadline and does not reset it on retry", async () => {
+    const w = await workflow((w) => {
+        w.executionTimeoutSeconds = 600;
+      }),
+      run = await runFor(w.version.id);
+    await expect(failProvider(run.id, 0)).rejects.toThrow();
+    const first = await status(run.id);
+    expect(
+      new Date(first.deadline_at).getTime() -
+        new Date(first.started_at).getTime(),
+    ).toBe(600000);
+    await persistence.query(
+      "UPDATE runs SET started_at=now()-interval '8 minutes' WHERE id=$1",
+      [run.id],
+    );
+    await expect(failProvider(run.id, 1)).rejects.toThrow();
+    expect((await status(run.id)).deadline_at).toEqual(first.deadline_at);
+    await persistence.query(
+      "UPDATE runs SET deadline_at=now()-interval '1 second' WHERE id=$1",
+      [run.id],
+    );
+    await runtime.executeRun(run.id);
+    expect(await status(run.id)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Execution deadline"),
+    });
+    expect(
+      await persistence.query(
+        "SELECT 1 FROM steps WHERE run_id=$1 AND status IN ('running','retrying')",
+        [run.id],
+      ),
+    ).toHaveLength(0);
+  });
+  it.each([false, true])(
+    "email-only input obeys requireAttachments=%s",
+    async (required) => {
+      const w = await workflow((w) => {
+          w.nodes[1].data.requireAttachments = required;
+          w.nodes[2].data.requiredTool = undefined;
+        }),
+        run = await runFor(w.version.id);
+      await persistence.query(
+        "UPDATE emails SET payload=jsonb_set(payload,'{attachments}','[]') WHERE id=$1",
+        [run.email.id],
+      );
+      const provider = new MockProvider();
+      provider.infer = async (messages) => {
+        expect(
+          messages
+            .flatMap((message) => message.parts ?? [])
+            .map((part) => part.text ?? "")
+            .join("\n"),
+        ).toContain(run.email.text);
+        return { role: "model", parts: [{ text: "Done" }] };
+      };
+      await runtime.executeRun(run.id, { provider });
+      expect((await status(run.id)).status).toBe(
+        required ? "failed" : "succeeded",
+      );
+      if (!required) {
+        expect(
+          (
+            await persistence.query(
+              "SELECT output FROM steps WHERE run_id=$1 AND node_id='upload'",
+              [run.id],
+            )
+          )[0].output.count,
+        ).toBe(0);
+        expect(await notices(run.id)).toHaveLength(0);
+      }
+    },
+  );
+  it("persists the reply envelope before invalid supplied attachments fail, even when optional", async () => {
+    const w = await workflow((w) => {
+        w.nodes[1].data.requireAttachments = false;
+      }),
+      run = await runFor(w.version.id);
+    await persistence.query(
+      "UPDATE emails SET payload=NULL,raw='{\"test\":true}' WHERE id=$1",
+      [run.email.id],
+    );
+    await runtime.executeRun(run.id, {
+      retrieveEmail: async (_p, _i, _s, _signal, options) => {
+        await options?.onEnvelope?.({
+          from: run.email.from,
+          subject: run.email.subject,
+          messageId: "<original@example.com>",
+        });
+        throw new Error("Unsupported or invalid attachment content");
+      },
+    });
+    expect((await status(run.id)).status).toBe("failed");
+    expect(await notices(run.id)).toMatchObject([
+      {
+        status: "preview",
+        message: {
+          headers: { "In-Reply-To": "<original@example.com>" },
+          text: expect.stringContaining("attachments"),
+        },
+      },
+    ]);
+  });
+  it.each([
+    "disabled",
+    "automatic",
+    "self",
+    "invalid",
+    "attempted",
+    "uncertain",
+  ])("suppresses system notices for %s", async (reason) => {
+    const w = await workflow((w) => {
+        if (reason === "disabled") w.nodes[0].data.sendFailureNotice = false;
+      }),
+      run = await runFor(w.version.id);
+    const email = {
+      ...run.email,
+      ...(reason === "self"
+        ? { from: w.draft.nodes[0].data.recipient }
+        : reason === "invalid"
+          ? { from: "bad" }
+          : reason === "automatic"
+            ? { headers: { "Auto-Submitted": "auto-replied" } }
+            : {}),
+    };
+    await persistence.query("UPDATE emails SET payload=$2 WHERE id=$1", [
+      run.email.id,
+      JSON.stringify(email),
+    ]);
+    if (reason === "attempted")
+      await persistence.query(
+        "INSERT INTO email_sends(run_id,node_id,message,mode,status,first_attempt_at) VALUES($1,'reply','{}','live','failed',now())",
+        [run.id],
+      );
+    if (reason === "uncertain")
+      await persistence.query(
+        "INSERT INTO tool_calls(id,run_id,name,args,status) VALUES($1,$1,'write','{}','running')",
+        [run.id],
+      );
+    await failProvider(run.id);
+    expect(await notices(run.id)).toMatchObject([
+      {
+        status: "suppressed",
+        suppression_reason: expect.any(String),
+        message: null,
+      },
+    ]);
+  });
+  it("retries notices with one stable key, preserves failure, and marks unresolved acceptance for review", async () => {
+    const { executeSystemNotice, dispatchSystemNotices } =
+      await import("../packages/runtime/src/system-notices");
+    const w = await workflow(),
+      run = await runFor(w.version.id);
+    await failProvider(run.id);
+    await Promise.all([dispatchSystemNotices(), dispatchSystemNotices()]);
+    const first = (await notices(run.id))[0];
+    expect(first.queue_job_id).toBeTruthy();
+    const keys: string[] = [];
+    const send = vi.fn(async (_message, key) => {
+      keys.push(key);
+      return {
+        ok: false as const,
+        ambiguous: true,
+        retryable: true,
+        error: "Email timeout",
+      };
+    });
+    for (let retryCount = 0; retryCount < 4; retryCount++) {
+      const call = executeSystemNotice(
+        run.id,
+        { retryCount, retryLimit: 3 },
+        send,
+      );
+      if (retryCount < 3) await expect(call).rejects.toThrow();
+      else await call;
+    }
+    await executeSystemNotice(run.id, {}, send);
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(new Set(keys).size).toBe(1);
+    expect(await notices(run.id)).toMatchObject([
+      { status: "needs_review", attempts: 4, queue_job_id: first.queue_job_id },
+    ]);
+    expect((await status(run.id)).status).toBe("failed");
+    await runtime.deleteWorkflow(w.id);
+    expect(await notices(run.id)).toHaveLength(0);
+  });
+  it("reuses a notice after a worker interruption and accepts with the frozen key", async () => {
+    const { executeSystemNotice } =
+      await import("../packages/runtime/src/system-notices");
+    const w = await workflow(),
+      run = await runFor(w.version.id);
+    await failProvider(run.id);
+    await persistence.query(
+      "UPDATE system_notices SET status='running',attempts=1,first_attempt_at=now() WHERE run_id=$1",
+      [run.id],
+    );
+    const send = vi.fn(async () => ({
+      ok: true as const,
+      providerEmailId: "accepted-notice",
+    }));
+    await executeSystemNotice(run.id, { retryCount: 1 }, send);
+    await executeSystemNotice(run.id, { retryCount: 2 }, send);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(await notices(run.id)).toMatchObject([
+      {
+        status: "succeeded",
+        provider_email_id: "accepted-notice",
+        attempts: 2,
+      },
+    ]);
+    expect((await status(run.id)).status).toBe("failed");
+  });
+  it("reconciles terminal queue jobs while respecting the run lock and successful checkpoints", async () => {
+    const { withRunLock } =
+      await import("../packages/runtime/src/run-lifecycle");
+    const boss = await runtime.getBoss();
+    const w = await workflow(),
+      run = await runFor(w.version.id);
+    await persistence.query("INSERT INTO outbox(run_id) VALUES($1)", [run.id]);
+    await runtime.dispatchOutbox();
+    const jobId = (await status(run.id)).queue_job_id;
+    expect(jobId).toBeTruthy();
+    await boss.cancel(runtime.QUEUE, jobId);
+    await withRunLock(run.id, () => runtime.maintenance());
+    expect((await status(run.id)).status).toBe("queued");
+    await runtime.maintenance();
+    expect((await status(run.id)).status).toBe("failed");
+    expect(await notices(run.id)).toHaveLength(1);
+  });
+  it("never checkpoints or dispatches a partial Claude tool call", async () => {
+    const { ClaudeProvider } = await import("../packages/providers/src/index");
+    const { claudeEvents, eventBytes } =
+      await import("./helpers/claude-stream");
+    const w = await workflow(),
+      run = await runFor(w.version.id);
+    await persistence.query(
+      "UPDATE emails SET payload=jsonb_set(payload,'{attachments}','[]') WHERE id=$1",
+      [run.email.id],
+    );
+    // Use a separately published optional-attachment workflow to reach inference.
+    w.draft.nodes[1].data.requireAttachments = false;
+    await runtime.saveDraft(w.id, w.draft);
+    const version = await runtime.publish(w.id);
+    await persistence.query("UPDATE runs SET version_id=$2 WHERE id=$1", [
+      run.id,
+      version.id,
+    ]);
+    const request = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (const event of claudeEvents([
+                {
+                  type: "tool_use",
+                  id: "partial",
+                  name: "submit_receipt",
+                  input: { merchant: "Synthetic" },
+                },
+              ]).slice(0, -1))
+                controller.enqueue(eventBytes(event));
+              controller.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    const dispatch = vi.fn();
+    await expect(
+      runtime.executeRun(run.id, {
+        provider: new ClaudeProvider("synthetic", request),
+        dispatch,
+        attempt: { retryCount: 0 },
+      }),
+    ).rejects.toThrow();
+    expect(dispatch).not.toHaveBeenCalled();
+    const [checkpoint] = await persistence.query(
+      "SELECT state FROM checkpoints WHERE run_id=$1",
+      [run.id],
+    );
+    expect(checkpoint.state.nodes.agent.pending).toBeUndefined();
+    expect(checkpoint.state.nodes.agent.turn).toBe(0);
+    await runtime.executeRun(run.id, {
+      provider: new ClaudeProvider("synthetic", request),
+      dispatch,
+      attempt: { retryCount: 3 },
+    });
+    expect((await status(run.id)).status).toBe("failed");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it("preserves a committed terminal checkpoint on the final queue attempt", async () => {
+    const w = await emailWorkflow(),
+      run = await runFor(w.version.id);
+    await runtime.executeRun(run.id, {
+      attempt: { retryCount: 3, retryLimit: 3 },
+      provider: new ReportProvider([report("success")]),
+      sendEmail: async () => ({ ok: true, providerEmailId: "committed" }),
+      afterCheckpoint: async (state) => {
+        if (state.cursor === null)
+          throw new NetworkError("interrupted after commit", false, true);
+      },
+    });
+    expect((await status(run.id)).status).toBe("succeeded");
+    expect(await notices(run.id)).toHaveLength(0);
+  });
+  it("reconciles uncertain notice jobs without altering the failed run or scheduling another notice", async () => {
+    const { dispatchSystemNotices, reconcileSystemNotices } =
+      await import("../packages/runtime/src/system-notices");
+    const { NOTICE_QUEUE } = await import("../packages/runtime/src/service");
+    const w = await workflow(),
+      run = await runFor(w.version.id);
+    await failProvider(run.id);
+    await dispatchSystemNotices();
+    const [notice] = await notices(run.id);
+    await persistence.query(
+      "UPDATE system_notices SET status='running',first_attempt_at=now(),attempts=1 WHERE run_id=$1",
+      [run.id],
+    );
+    await (await runtime.getBoss()).cancel(NOTICE_QUEUE, notice.queue_job_id);
+    await reconcileSystemNotices();
+    expect(await notices(run.id)).toMatchObject([
+      { status: "needs_review", attempts: 1 },
+    ]);
+    expect((await status(run.id)).status).toBe("failed");
+    await dispatchSystemNotices();
+    expect(await notices(run.id)).toHaveLength(1);
+  });
+  it("repairs historical terminal steps without sending retrospective notices", async () => {
+    const w = await workflow(),
+      run = await runFor(w.version.id);
+    await persistence.query(
+      "UPDATE runs SET status='failed',error='Historical failure',finished_at=now() WHERE id=$1",
+      [run.id],
+    );
+    await persistence.query(
+      "INSERT INTO steps(id,run_id,node_id,status,output) VALUES($1,$1,'agent','running','{}')",
+      [run.id],
+    );
+    await runtime.maintenance();
+    expect(
+      (
+        await persistence.query("SELECT status FROM steps WHERE run_id=$1", [
+          run.id,
+        ])
+      )[0].status,
+    ).toBe("failed");
+    expect(await notices(run.id)).toHaveLength(0);
   });
 });

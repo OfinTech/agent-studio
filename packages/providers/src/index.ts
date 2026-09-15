@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { syntheticReportSource } from "../../contracts/src/reports";
 import { GoogleGenAI } from "@google/genai";
 import {
@@ -459,24 +460,110 @@ export class ClaudeProvider extends InlineProvider {
       }
       if (content.length) input.push({ role: "user", content });
     }
-    const response = await this.post(
-      "https://api.anthropic.com/v1/messages",
-      { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" },
+    signal.throwIfAborted();
+    const started = Date.now();
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), 180000);
+    const requestSignal = AbortSignal.any([signal, timeout.signal]);
+    const client = new Anthropic({
+      apiKey: this.apiKey,
+      fetch: this.request,
+      maxRetries: 0,
+      timeout: 180000,
+    });
+    const stream = client.messages.stream(
       {
-        model: config.model,
+        model: config.model!,
         system: config.systemPrompt,
-        messages: input,
+        messages: input as unknown as Anthropic.MessageParam[],
         max_tokens: config.maxOutputTokens ?? 4096,
         tools: tools.map((t) => ({
           name: t.name,
           description: t.description,
-          input_schema: t.inputSchema,
+          input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
           ...(t.name === "finish_task" ? { strict: true } : {}),
         })),
       },
-      signal,
+      { signal: requestSignal },
     );
-    if (!["end_turn", "tool_use"].includes(response.stop_reason))
+    let requestId: string | null = null;
+    let outcome = "interrupted";
+    let response: Anthropic.Message;
+    const toolJson = new Map<number, string>();
+    stream.on("connect", () => {
+      const id = stream.response?.headers.get("request-id");
+      if (id && /^[\w-]{1,200}$/.test(id)) requestId = id;
+    });
+    stream.on("streamEvent", (event) => {
+      if (
+        event.type === "content_block_delta" &&
+        event.delta.type === "input_json_delta"
+      )
+        toolJson.set(
+          event.index,
+          (toolJson.get(event.index) ?? "") + event.delta.partial_json,
+        );
+    });
+    try {
+      response = await stream.finalMessage();
+      requestSignal.throwIfAborted();
+      // The helper accumulates partial JSON permissively. Only complete JSON is dispatchable.
+      for (const [index, value] of toolJson) {
+        const block = response.content[index];
+        if (block?.type === "tool_use") block.input = JSON.parse(value);
+      }
+      outcome = "completed";
+    } catch (error) {
+      if (signal.aborted) {
+        outcome = "cancelled";
+        signal.throwIfAborted();
+      }
+      if (
+        timeout.signal.aborted ||
+        error instanceof Anthropic.APIConnectionTimeoutError
+      ) {
+        outcome = "request_timeout";
+        throw new NetworkError(
+          "Provider Claude request timed out after 180 seconds",
+          false,
+          true,
+        );
+      }
+      if (
+        error instanceof Anthropic.APIError &&
+        error.requestID &&
+        /^[\w-]{1,200}$/.test(error.requestID)
+      )
+        requestId = error.requestID;
+      const status =
+        error instanceof Anthropic.APIError ? error.status : undefined;
+      if (
+        status &&
+        status !== 408 &&
+        status !== 409 &&
+        status !== 429 &&
+        status < 500
+      ) {
+        outcome = "rejected";
+        throw new Error(
+          `Provider Claude rejected request (HTTP ${status}); check credential, model ID, attachment and tool capabilities`,
+        );
+      }
+      throw new NetworkError(
+        "Provider Claude stream interrupted or invalid; retry the inference",
+        false,
+        true,
+      );
+    } finally {
+      clearTimeout(timer);
+      if (!stream.ended) stream.abort();
+      console.info("Claude request", {
+        requestId,
+        durationMs: Date.now() - started,
+        outcome,
+      });
+    }
+    if (!["end_turn", "tool_use"].includes(response.stop_reason ?? ""))
       throw new Error(
         "Provider Claude stopped: " + String(response.stop_reason),
       );
@@ -494,7 +581,7 @@ export class ClaudeProvider extends InlineProvider {
       role: "model",
       parts,
       continuation: { provider: "claude", blocks },
-      termination: response.stop_reason,
+      termination: response.stop_reason ?? undefined,
     };
   }
 }

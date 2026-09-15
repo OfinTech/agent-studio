@@ -24,6 +24,7 @@ import {
 import { validateTool } from "../../mcp/src/index";
 import { inboundSchema, syntheticEmail } from "../../connectors/src/index";
 export const QUEUE = "workflow-runs";
+export const NOTICE_QUEUE = "system-notices";
 export class WorkflowNotFoundError extends ConfigurationError {}
 
 export async function createWorkflow(
@@ -71,13 +72,16 @@ export function getBoss() {
     const boss = new PgBoss({ connectionString: process.env.DATABASE_URL });
     boss.on("error", () => console.error("Queue operation failed"));
     await boss.start();
-    await boss.createQueue(QUEUE, {
+    const options = {
       retryLimit: 3,
       retryDelay: 5,
       retryBackoff: true,
-      expireInSeconds: 360,
+      expireInSeconds: 600,
       heartbeatSeconds: 30,
-    });
+    };
+    await boss.createQueue(QUEUE, options);
+    await boss.updateQueue(QUEUE, options);
+    await boss.createQueue(NOTICE_QUEUE, { ...options, expireInSeconds: 60 });
     return boss;
   })().catch((error) => {
     bossPromise = undefined;
@@ -89,12 +93,41 @@ export async function dispatchOutbox() {
   const rows = await query(
     "SELECT run_id FROM outbox WHERE sent_at IS NULL LIMIT 100",
   );
-  for (const row of rows) {
-    await boss.send(QUEUE, { runId: row.run_id }, { singletonKey: row.run_id });
-    await query("UPDATE outbox SET sent_at=now() WHERE run_id=$1", [
-      row.run_id,
-    ]);
-  }
+  for (const row of rows)
+    await transaction(async (client) => {
+      const {
+        rows: [record],
+      } = await client.query(
+        "SELECT o.sent_at,r.deadline_at,v.snapshot FROM outbox o JOIN runs r ON r.id=o.run_id JOIN versions v ON v.id=r.version_id WHERE o.run_id=$1 FOR UPDATE OF o",
+        [row.run_id],
+      );
+      if (!record || record.sent_at) return;
+      const seconds = record.deadline_at
+        ? Math.max(
+            1,
+            Math.ceil(
+              (new Date(record.deadline_at).getTime() - Date.now()) / 1000,
+            ),
+          )
+        : (record.snapshot.workflow.executionTimeoutSeconds ?? 300);
+      const jobId = await boss.send(
+        QUEUE,
+        { runId: row.run_id },
+        {
+          singletonKey: row.run_id,
+          expireInSeconds: seconds,
+          db: { executeSql: (sql, values) => client.query(sql, values) },
+        },
+      );
+      if (!jobId) throw new Error("Run queue association failed");
+      await client.query("UPDATE runs SET queue_job_id=$2 WHERE id=$1", [
+        row.run_id,
+        jobId,
+      ]);
+      await client.query("UPDATE outbox SET sent_at=now() WHERE run_id=$1", [
+        row.run_id,
+      ]);
+    });
 }
 export async function publish(id: string) {
   return transaction(async (client) => {
@@ -260,6 +293,18 @@ export async function deleteWorkflow(id: string) {
         "Wait for the workflow's active runs to finish before deleting it",
       );
     const ids = runs.map((r) => r.id);
+    for (const runId of ids) {
+      const {
+        rows: [lock],
+      } = await client.query(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended($1,0)) AS acquired",
+        [runId],
+      );
+      if (!lock.acquired)
+        throw new ConfigurationError(
+          "Wait for active run or system notice delivery before deleting it",
+        );
+    }
     const { rows: files } = await client.query(
       "SELECT id FROM generated_reports WHERE run_id=ANY($1::text[])",
       [ids],
@@ -273,6 +318,7 @@ export async function deleteWorkflow(id: string) {
       [ids],
     );
     for (const table of [
+      "system_notices",
       "email_sends",
       "provider_files",
       "outbox",

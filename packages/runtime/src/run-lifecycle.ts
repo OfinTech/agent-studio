@@ -1,9 +1,39 @@
-import { pool, query } from "../../persistence/src/index";
+import { decodeCheckpoint } from "./checkpoint";
+import { prepareSystemNotice } from "./system-notices";
+import { pool, query, transaction } from "../../persistence/src/index";
 import { NetworkError } from "../../connectors/src/network";
 import { emailRetryWindowOpen } from "../../connectors/src/send-email";
 import type { EmailSendRecord } from "./email-execution";
 
 export const RUN_DEADLINE_MS = 5 * 60 * 1000;
+export type QueueAttempt = {
+  jobId?: string;
+  retryCount?: number;
+  retryLimit?: number;
+  signal?: AbortSignal;
+};
+export class DeadlineError extends Error {
+  constructor() {
+    super(
+      "Execution deadline exceeded. Increase the workflow execution time or shorten the task.",
+    );
+  }
+}
+export class RetryExhaustedError extends Error {
+  constructor() {
+    super(
+      "Retry limit exhausted. The workflow could not complete after three retries.",
+    );
+  }
+}
+export function hasTerminalCheckpoint(value: unknown): boolean {
+  if (!value) return false;
+  try {
+    return decodeCheckpoint(value, "").cursor === null;
+  } catch {
+    return false;
+  }
+}
 export class ReviewError extends Error {}
 export class RetryError extends Error {}
 
@@ -55,10 +85,18 @@ function failureMessage(
     return emailReview
       ? "Email acceptance is uncertain. Check Resend before starting another run."
       : "API write outcome is uncertain. Check the client API before starting another run.";
+  if (
+    transient &&
+    error instanceof NetworkError &&
+    error.message.startsWith("Provider ")
+  )
+    return error.message + "; queued for retry.";
   if (transient)
     return error instanceof RetryError && error.message.startsWith("Email")
       ? error.message
       : "Transient failure; queued for retry.";
+  if (error instanceof DeadlineError || error instanceof RetryExhaustedError)
+    return error.message;
   // Only controlled error categories may reach the inspector, never arbitrary upstream details.
   if (
     error instanceof Error &&
@@ -71,9 +109,11 @@ function failureMessage(
 }
 export async function recordRunFailure(
   runId: string,
-  activeNode: string,
+  _activeNode: string,
   error: unknown,
+  attempt: QueueAttempt = {},
 ): Promise<boolean> {
+  if (attempt.signal?.aborted) error = new RetryError("Worker interrupted");
   let transient =
     error instanceof RetryError ||
     (error instanceof NetworkError && error.retryable);
@@ -85,13 +125,39 @@ export async function recordRunFailure(
     "SELECT * FROM email_sends WHERE run_id=$1 AND status IN ('running','ambiguous','needs_review')",
     [runId],
   );
-  const [run] = await query<{ started_at: Date | null }>(
-    "SELECT started_at FROM runs WHERE id=$1",
-    [runId],
-  );
-  const withinDeadline =
-    run?.started_at != null &&
-    Date.now() - new Date(run.started_at).getTime() < RUN_DEADLINE_MS;
+  const [run] = await query<{
+    started_at: Date | null;
+    deadline_at: Date | null;
+  }>("SELECT started_at,deadline_at FROM runs WHERE id=$1", [runId]);
+  const deadline = run?.deadline_at
+    ? new Date(run.deadline_at).getTime()
+    : run?.started_at
+      ? new Date(run.started_at).getTime() + RUN_DEADLINE_MS
+      : Infinity;
+  const withinDeadline = Date.now() < deadline;
+  if (!withinDeadline) {
+    transient = false;
+    error = new DeadlineError();
+  } else if (
+    transient &&
+    (attempt.retryCount ?? 0) >= Math.min(attempt.retryLimit ?? 3, 3)
+  ) {
+    transient = false;
+    error = new RetryExhaustedError();
+  }
+  if (!transient) {
+    const [checkpoint] = await query(
+      "SELECT state FROM checkpoints WHERE run_id=$1",
+      [runId],
+    );
+    if (checkpoint && hasTerminalCheckpoint(checkpoint.state)) {
+      await query(
+        "UPDATE runs SET status='succeeded',error=NULL,finished_at=coalesce(finished_at,now()) WHERE id=$1",
+        [runId],
+      );
+      return false;
+    }
+  }
   const canRetryEmail =
     transient &&
     withinDeadline &&
@@ -111,25 +177,16 @@ export async function recordRunFailure(
   if (review) transient = false;
   const message = failureMessage(error, review, emailReview, transient);
   const status = review ? "needs_review" : transient ? "queued" : "failed";
-  await query(
-    "UPDATE runs SET status=$2,error=$3,finished_at=CASE WHEN $2='queued' THEN NULL ELSE now() END WHERE id=$1",
-    [runId, status, message],
-  );
-  await query(
-    "UPDATE steps SET status=$3,output=$4 WHERE run_id=$1 AND node_id=$2 AND status='running'",
-    [
-      runId,
-      activeNode,
-      transient ? "retrying" : status,
-      JSON.stringify({ error: message }),
-    ],
-  );
-  if (!transient) await finalizeEmailSteps(runId);
+  await transaction(async (client) => {
+    await client.query(
+      "UPDATE runs SET status=$2,error=$3,finished_at=CASE WHEN $2='queued' THEN NULL ELSE now() END WHERE id=$1",
+      [runId, status, message],
+    );
+    await client.query(
+      "UPDATE steps SET status=$2,output=jsonb_build_object('error',$3::text) WHERE run_id=$1 AND status IN ('running','retrying')",
+      [runId, transient ? "retrying" : status, message],
+    );
+    if (!transient) await prepareSystemNotice(client, runId, review, message);
+  });
   return transient;
-}
-export async function finalizeEmailSteps(runId?: string) {
-  await query(
-    "UPDATE steps s SET status=r.status,output=jsonb_build_object('error',r.error) FROM runs r,email_sends e WHERE s.run_id=r.id AND e.run_id=r.id AND e.node_id=s.node_id AND r.status IN ('failed','needs_review') AND s.status IN ('running','retrying') AND ($1::text IS NULL OR r.id=$1)",
-    [runId ?? null],
-  );
 }

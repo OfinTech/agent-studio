@@ -38,6 +38,19 @@ export type Run = {
     expired_at: string | null;
     current: boolean;
   }[];
+  systemNotices?: {
+    status: string;
+    mode: "preview" | "live";
+    message: {
+      from: string;
+      to: string[];
+      subject: string;
+      text: string;
+    } | null;
+    provider_email_id: string | null;
+    suppression_reason: string | null;
+    error: string | null;
+  }[];
   emailSends?: {
     node_id: string;
     mode: "preview" | "live";

@@ -94,3 +94,18 @@ describe("workflow contracts", () => {
     );
   });
 });
+
+it("validates optional execution and email settings without rewriting legacy defaults", () => {
+  const legacy = workflowSchema.parse(receiptWorkflow);
+  expect(legacy.executionTimeoutSeconds).toBeUndefined();
+  expect(legacy.nodes[0].data.sendFailureNotice).toBeUndefined();
+  expect(legacy.nodes[1].data.requireAttachments).toBeUndefined();
+  for (const executionTimeoutSeconds of [60, 300, 600])
+    expect(
+      workflowSchema.safeParse({ ...legacy, executionTimeoutSeconds }).success,
+    ).toBe(true);
+  for (const executionTimeoutSeconds of [0, 59, 601, 60.5])
+    expect(
+      workflowSchema.safeParse({ ...legacy, executionTimeoutSeconds }).success,
+    ).toBe(false);
+});

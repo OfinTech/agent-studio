@@ -53,6 +53,8 @@ export const nodeSchema = z.object({
   data: z.object({
     label: z.string(),
     recipient: z.string().optional(),
+    sendFailureNotice: z.boolean().optional(),
+    requireAttachments: z.boolean().optional(),
     mimeTypes: z
       .array(z.enum(["application/pdf", "image/jpeg", "image/png"]))
       .optional(),
@@ -86,6 +88,7 @@ export const nodeSchema = z.object({
   }),
 });
 export const workflowSchema = z.object({
+  executionTimeoutSeconds: z.number().int().min(60).max(600).optional(),
   name: z.string().min(1).max(100),
   nodes: z.array(nodeSchema).max(30),
   edges: z
@@ -110,13 +113,18 @@ export type Email = {
   text: string;
   attachments: Attachment[];
   messageId?: string;
+  headers?: Record<string, string>;
 };
 export type EmailMessage = {
   from: string;
   to: string[];
   subject: string;
   text: string;
-  headers?: { "In-Reply-To": string; References: string };
+  headers?: {
+    "In-Reply-To"?: string;
+    References?: string;
+    "Auto-Submitted"?: "auto-replied";
+  };
   attachments?: ReportReference[];
 };
 export type Attachment = {
@@ -665,3 +673,8 @@ export function renderPrompt(
     return typeof value === "string" ? value : JSON.stringify(value);
   });
 }
+
+export type ReplyEnvelope = Pick<
+  Email,
+  "from" | "subject" | "messageId" | "headers"
+>;

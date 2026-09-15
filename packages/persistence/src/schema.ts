@@ -57,6 +57,10 @@ export const emails = pgTable("emails", {
   providerId: text("provider_id").notNull().unique(),
   payload: jsonb("payload").$type<Email>(),
   raw: jsonb("raw").notNull(),
+  replyEnvelope:
+    jsonb("reply_envelope").$type<
+      import("../../contracts/src/index").ReplyEnvelope
+    >(),
   createdAt: created(),
 });
 export const attachments = pgTable("attachments", {
@@ -81,6 +85,8 @@ export const runs = pgTable(
     status: text("status").notNull().default("queued"),
     error: text("error"),
     startedAt: timestamp("started_at", { withTimezone: true }),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
+    queueJobId: text("queue_job_id"),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: created(),
   },
@@ -244,3 +250,20 @@ export const templateResources = pgTable(
   },
   (t) => [index("template_resources_workflow").on(t.workflowId)],
 );
+
+export const systemNotices = pgTable("system_notices", {
+  runId: text("run_id")
+    .primaryKey()
+    .references(() => runs.id),
+  message: jsonb("message").$type<EmailMessage>(),
+  mode: text("mode").notNull(),
+  status: text("status").notNull(),
+  suppressionReason: text("suppression_reason"),
+  queueJobId: text("queue_job_id"),
+  attempts: integer("attempts").notNull().default(0),
+  uncertain: boolean("uncertain").notNull().default(false),
+  firstAttemptAt: timestamp("first_attempt_at", { withTimezone: true }),
+  providerEmailId: text("provider_email_id"),
+  error: text("error"),
+  createdAt: created(),
+});

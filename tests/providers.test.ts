@@ -1,3 +1,4 @@
+import { claudeResponse } from "./helpers/claude-stream";
 import { receiptTool, receiptWorkflow } from "../fixtures/receipt-workflow";
 import { it, expect, vi } from "vitest";
 import { GeminiProvider } from "../packages/providers/src/index";
@@ -121,36 +122,10 @@ for (const kind of ["openai", "claude"] as const) {
               input: { state: "success", reason: "ok", result: "done" },
             },
           ];
-    const request = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(
-          JSON.stringify(
-            kind === "openai"
-              ? { status: "completed", output: blocks }
-              : { stop_reason: "tool_use", content: blocks },
-          ),
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify(
-            kind === "openai"
-              ? { status: "completed", output: blocks }
-              : { stop_reason: "tool_use", content: blocks },
-          ),
-        ),
-      );
-    // Return a fresh Response body on every request.
-    request.mockImplementation(
-      async () =>
-        new Response(
-          JSON.stringify(
-            kind === "openai"
-              ? { status: "completed", output: blocks }
-              : { stop_reason: "tool_use", content: blocks },
-          ),
-        ),
+    const request = vi.fn(async () =>
+      kind === "openai"
+        ? new Response(JSON.stringify({ status: "completed", output: blocks }))
+        : claudeResponse(blocks),
     );
     const provider =
       kind === "openai"
@@ -188,7 +163,7 @@ for (const kind of ["openai", "claude"] as const) {
       [finish],
       AbortSignal.timeout(2000),
     );
-    const body = JSON.parse(request.mock.calls[1][1].body);
+    const body = JSON.parse((request.mock.calls[1] as any)[1].body);
     if (kind === "openai") {
       expect(body.input).toContainEqual(blocks[0]);
       expect(body.input.at(-1)).toMatchObject({
@@ -237,7 +212,14 @@ for (const kind of ["openai", "claude"] as const) {
             { stop_reason: "refusal", content: [] },
           ];
     for (const response of responses) {
-      const request = vi.fn(async () => new Response(JSON.stringify(response)));
+      const request = vi.fn(async () =>
+        kind === "openai"
+          ? new Response(JSON.stringify(response))
+          : claudeResponse(
+              [],
+              (response as { stop_reason: string }).stop_reason,
+            ),
+      );
       const p =
         kind === "openai"
           ? new OpenAIProvider("synthetic", request)
@@ -327,26 +309,20 @@ it("OpenAI and Claude hydrate PDF/JPEG/PNG from durable local references without
     ];
     const checkpoint = JSON.stringify(messages);
     for (const kind of ["openai", "claude"] as const) {
-      const request = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify(
-              kind === "openai"
-                ? {
-                    status: "completed",
-                    output: [
-                      {
-                        type: "message",
-                        content: [{ type: "output_text", text: "Done" }],
-                      },
-                    ],
-                  }
-                : {
-                    stop_reason: "end_turn",
-                    content: [{ type: "text", text: "Done" }],
+      const request = vi.fn(async () =>
+        kind === "openai"
+          ? new Response(
+              JSON.stringify({
+                status: "completed",
+                output: [
+                  {
+                    type: "message",
+                    content: [{ type: "output_text", text: "Done" }],
                   },
-            ),
-          ),
+                ],
+              }),
+            )
+          : claudeResponse([{ type: "text", text: "Done" }], "end_turn"),
       );
       const provider =
         kind === "openai"

@@ -141,7 +141,12 @@ export function usePlatform() {
         const value = await api("runs/" + runId);
         if (cancelled) return;
         setRun(value);
-        if (["queued", "running"].includes(value.status))
+        if (
+          ["queued", "running"].includes(value.status) ||
+          value.systemNotices?.some((notice: { status: string }) =>
+            ["prepared", "running", "retryable"].includes(notice.status),
+          )
+        )
           timer = setTimeout(poll, 1500);
         else {
           await refresh();

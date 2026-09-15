@@ -390,22 +390,28 @@ async function handle(
         [path[1]],
       );
       if (!run) throw new HttpError(404, "Run not found");
-      const [steps, calls, emailSends, reports] = await Promise.all([
-        query("SELECT * FROM steps WHERE run_id=$1 ORDER BY created_at", [
-          path[1],
-        ]),
-        query("SELECT * FROM tool_calls WHERE run_id=$1 ORDER BY created_at", [
-          path[1],
-        ]),
-        query("SELECT * FROM email_sends WHERE run_id=$1 ORDER BY created_at", [
-          path[1],
-        ]),
-        query(
-          "SELECT a.id,a.node_id,a.template_node_id,a.generation_fingerprint,a.attempt_order,a.source_hash,a.renderer_profile,a.status,a.report_id,CASE WHEN r.finished_at < now()-interval '7 days' THEN a.result #- '{data,textPreview}' ELSE a.result END AS result,g.page_count,g.size,g.text_truncated,CASE WHEN r.finished_at < now()-interval '7 days' THEN NULL ELSE g.extracted_text END AS extracted_text,CASE WHEN r.finished_at < now()-interval '7 days' THEN r.finished_at ELSE g.expired_at END AS expired_at,(a.status='succeeded' AND g.expired_at IS NULL AND (r.finished_at IS NULL OR r.finished_at > now()-interval '7 days') AND a.attempt_order=(SELECT max(b.attempt_order) FROM report_attempts b WHERE b.run_id=a.run_id AND b.node_id=a.node_id)) AS current FROM report_attempts a JOIN runs r ON r.id=a.run_id LEFT JOIN generated_reports g ON g.id=a.report_id WHERE a.run_id=$1 ORDER BY a.node_id,a.attempt_order",
-          [path[1]],
-        ),
-      ]);
-      return response(redact({ ...run, steps, calls, emailSends, reports }));
+      const [steps, calls, emailSends, reports, systemNotices] =
+        await Promise.all([
+          query("SELECT * FROM steps WHERE run_id=$1 ORDER BY created_at", [
+            path[1],
+          ]),
+          query(
+            "SELECT * FROM tool_calls WHERE run_id=$1 ORDER BY created_at",
+            [path[1]],
+          ),
+          query(
+            "SELECT * FROM email_sends WHERE run_id=$1 ORDER BY created_at",
+            [path[1]],
+          ),
+          query(
+            "SELECT a.id,a.node_id,a.template_node_id,a.generation_fingerprint,a.attempt_order,a.source_hash,a.renderer_profile,a.status,a.report_id,CASE WHEN r.finished_at < now()-interval '7 days' THEN a.result #- '{data,textPreview}' ELSE a.result END AS result,g.page_count,g.size,g.text_truncated,CASE WHEN r.finished_at < now()-interval '7 days' THEN NULL ELSE g.extracted_text END AS extracted_text,CASE WHEN r.finished_at < now()-interval '7 days' THEN r.finished_at ELSE g.expired_at END AS expired_at,(a.status='succeeded' AND g.expired_at IS NULL AND (r.finished_at IS NULL OR r.finished_at > now()-interval '7 days') AND a.attempt_order=(SELECT max(b.attempt_order) FROM report_attempts b WHERE b.run_id=a.run_id AND b.node_id=a.node_id)) AS current FROM report_attempts a JOIN runs r ON r.id=a.run_id LEFT JOIN generated_reports g ON g.id=a.report_id WHERE a.run_id=$1 ORDER BY a.node_id,a.attempt_order",
+            [path[1]],
+          ),
+          query("SELECT * FROM system_notices WHERE run_id=$1", [run.id]),
+        ]);
+      return response(
+        redact({ ...run, steps, calls, emailSends, reports, systemNotices }),
+      );
     }
     throw new HttpError(404, "Route not found");
   } catch (error) {

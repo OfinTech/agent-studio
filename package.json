@@ -29,6 +29,7 @@
     "test:pdf:isolation": "tsx scripts/pdf-isolation.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@google/genai": "^2.21.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "ajv": "^8.17.1",

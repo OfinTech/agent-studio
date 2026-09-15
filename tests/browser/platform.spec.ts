@@ -2051,3 +2051,100 @@ test("duplication excludes unsaved edits and preserves the source draft", async 
     page.getByRole("heading", { name: "Unsaved source name", exact: true }),
   ).toBeVisible();
 });
+
+test("execution budget, attachment requirement and system notices persist with keyboard and mobile inspection", async ({
+  page,
+}) => {
+  await signIn(page);
+  const record = await createReceipt(page, "System notices");
+  const workflowId = record.url.split("/").at(-1)!;
+  const trigger = page.getByRole("button", {
+    name: "Workflow settings",
+    exact: true,
+  });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", {
+    name: "Workflow settings",
+    exact: true,
+  });
+  await expect(dialog.getByLabel("Execution time (minutes)")).toHaveValue("5");
+  await dialog.getByLabel("Execution time (minutes)").fill("10");
+  await dialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(trigger).toBeFocused();
+  await page.locator('.react-flow__node[data-id="email"]').click();
+  const toggle = page.getByLabel("Send system-error notices");
+  await expect(toggle).toBeChecked();
+  await toggle.focus();
+  await page.keyboard.press("Space");
+  await expect(toggle).not.toBeChecked();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
+  await page.locator('.react-flow__node[data-id="upload"]').click();
+  await expect(page.getByLabel("Require attachments")).toBeChecked();
+  await page.getByLabel("Require attachments").uncheck();
+  await page.getByLabel("PDF", { exact: true }).uncheck();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Saved");
+  await page
+    .getByRole("button", { name: /^(Publish|Republish)$/, exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Published");
+  await page.reload();
+  await trigger.click();
+  await expect(dialog.getByLabel("Execution time (minutes)")).toHaveValue("10");
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+  await page.locator('.react-flow__node[data-id="upload"]').click();
+  await expect(page.getByLabel("Require attachments")).not.toBeChecked();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
+  await page.locator('.react-flow__node[data-id="email"]').click();
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await page
+    .getByRole("button", { name: "Close settings", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: /^(Publish|Republish)$/, exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Published");
+  const runTrigger = page.getByRole("button", {
+    name: "Test run",
+    exact: true,
+  });
+  await runTrigger.click();
+  await expect(page.getByTestId("run-status")).toHaveText("failed", {
+    timeout: 30000,
+  });
+  await expect(page.getByTestId("system-notice")).toContainText("Preview only");
+  await expect(page.getByTestId("system-notice")).toContainText("Run ID:");
+  await expect(page.getByTestId("run-inspector")).toContainText("Not run");
+  await page.screenshot({ path: "test-results/system-notice-desktop.png" });
+  await page.keyboard.press("Escape");
+  await expect(runTrigger).toBeFocused();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Fit View", exact: true }).click();
+  await page.locator('.react-flow__node[data-id="email"]').click();
+  await expect(toggle).toBeChecked();
+  await page.keyboard.press("Escape");
+  await page.reload();
+  await page.getByRole("button", { name: "Test run", exact: true }).click();
+  await expect(page.getByTestId("run-status")).toHaveText("failed", {
+    timeout: 30000,
+  });
+  await expect(page.getByTestId("system-notice")).toContainText("Preview only");
+  await page.screenshot({ path: "test-results/system-notice-mobile.png" });
+  await page.keyboard.press("Escape");
+  expect(
+    (
+      await page.request.delete(`/api/workflows/${workflowId}`, {
+        headers: { Origin: new URL(page.url()).origin },
+      })
+    ).ok(),
+  ).toBe(true);
+});

@@ -1,3 +1,9 @@
+import { validateReplyEnvelope } from "../../connectors/src/system-notice";
+import {
+  dispatchSystemNotices,
+  reconcileSystemNotices,
+} from "./system-notices";
+import { getBoss, QUEUE } from "./service";
 import {
   attachedTemplates,
   templateTool,
@@ -55,10 +61,13 @@ import {
   type Checkpoint,
 } from "./checkpoint";
 import {
-  RUN_DEADLINE_MS,
+  DeadlineError,
+  hasTerminalCheckpoint,
+  RetryExhaustedError,
+  RetryError,
+  type QueueAttempt,
   recordRunFailure,
   withRunLock,
-  finalizeEmailSteps,
 } from "./run-lifecycle";
 import { executeEmailStep } from "./email-execution";
 export { decodeCheckpoint, type Checkpoint } from "./checkpoint";
@@ -67,6 +76,7 @@ const json = (value: unknown) => JSON.stringify(value);
 type RunRecord = {
   status: string;
   started_at: Date | null;
+  deadline_at: Date | null;
   snapshot: Snapshot;
   payload: Email | null;
   email_id: string;
@@ -76,6 +86,8 @@ type RunRecord = {
 export async function executeRun(
   runId: string,
   overrides: {
+    attempt?: QueueAttempt;
+    retrieveEmail?: typeof retrieveEmail;
     provider?: Provider;
     compileReport?: CompileReport;
     dispatch?: ToolDispatch;
@@ -131,18 +143,20 @@ export async function executeRun(
         terminal = true;
         return;
       }
-      const started = run.started_at
-        ? new Date(run.started_at).getTime()
-        : Date.now();
-      if (Date.now() - started >= RUN_DEADLINE_MS)
-        throw new Error("Run exceeded the five minute deadline");
-      const signal = AbortSignal.timeout(
-        RUN_DEADLINE_MS - (Date.now() - started),
+      const [timing] = await query<{ deadline_at: Date }>(
+        "UPDATE runs SET status='running',started_at=coalesce(started_at,now()),deadline_at=coalesce(deadline_at,coalesce(started_at,now())+make_interval(secs => $2)),queue_job_id=coalesce(queue_job_id,$3),error=NULL WHERE id=$1 RETURNING deadline_at",
+        [
+          runId,
+          workflow.executionTimeoutSeconds ?? 300,
+          overrides.attempt?.jobId ?? null,
+        ],
       );
-      await query(
-        "UPDATE runs SET status='running',started_at=coalesce(started_at,now()),error=NULL WHERE id=$1",
-        [runId],
-      );
+      const remaining = new Date(timing.deadline_at).getTime() - Date.now();
+      if (remaining <= 0) throw new DeadlineError();
+      const signal = AbortSignal.any([
+        AbortSignal.timeout(remaining),
+        ...(overrides.attempt?.signal ? [overrides.attempt.signal] : []),
+      ]);
 
       const { save: checkpointState, complete } = checkpointWriter(
         runId,
@@ -152,7 +166,7 @@ export async function executeRun(
       const step = async (nodeId: string, status: string, output: unknown) => {
         activeNode = nodeId;
         await query(
-          "INSERT INTO steps(id,run_id,node_id,status,output) VALUES($1,$2,$3,$4,$5) ON CONFLICT(run_id,node_id) DO UPDATE SET status=excluded.status,output=excluded.output",
+          "INSERT INTO steps(id,run_id,node_id,status,output) VALUES($1,$2,$3,$4,$5) ON CONFLICT(run_id,node_id) DO UPDATE SET status=excluded.status,output=excluded.output WHERE steps.status <> 'succeeded'",
           [runId + ":" + nodeId, runId, nodeId, status, json(output)],
         );
       };
@@ -160,11 +174,21 @@ export async function executeRun(
       let email = run.payload ?? undefined;
       await step(start.id, "running", {});
       if (!email) {
-        email = await retrieveEmail(
+        email = await (overrides.retrieveEmail ?? retrieveEmail)(
           run.provider_id,
           run.email_id,
           storage,
           signal,
+          {
+            requireAttachments: upload.data.requireAttachments,
+            messageId: run.raw?.data?.message_id,
+            onEnvelope: async (envelope) => {
+              await query("UPDATE emails SET reply_envelope=$2 WHERE id=$1", [
+                run.email_id,
+                envelope ? json(envelope) : null,
+              ]);
+            },
+          },
         );
         await query("UPDATE emails SET payload=$2 WHERE id=$1", [
           run.email_id,
@@ -187,6 +211,10 @@ export async function executeRun(
           json(email),
         ]);
       }
+      await query("UPDATE emails SET reply_envelope=$2 WHERE id=$1", [
+        run.email_id,
+        json(validateReplyEnvelope(email)),
+      ]);
       state.outputs[start.id] = email;
       await step(start.id, "succeeded", {
         from: email.from,
@@ -197,7 +225,11 @@ export async function executeRun(
       const selected = email.attachments.filter((a) =>
         upload.data.mimeTypes?.some((mime) => mime === a.mimeType),
       );
-      if (!selected.length)
+      if (
+        !selected.length &&
+        (upload.data.requireAttachments !== false ||
+          email.attachments.length > 0)
+      )
         throw new Error("No attachments match the upload configuration");
       if (
         selected.reduce((sum, a) => sum + a.size, 0) >
@@ -488,7 +520,12 @@ export async function executeRun(
       );
       terminal = true;
     } catch (error) {
-      const transient = await recordRunFailure(runId, activeNode, error);
+      const transient = await recordRunFailure(
+        runId,
+        activeNode,
+        error,
+        overrides.attempt,
+      );
       terminal = !transient;
       if (transient) throw error;
     } finally {
@@ -514,18 +551,70 @@ export async function cleanupProviderFiles(runId: string, provider?: Provider) {
   }
 }
 export async function maintenance() {
-  // A durable terminal cursor wins over retry expiry after a worker dies before updating the run.
-  await query(
-    "UPDATE runs r SET status='succeeded',error=NULL,finished_at=coalesce(r.finished_at,now()) FROM checkpoints c WHERE c.run_id=r.id AND c.state->>'version'='2' AND c.state->'cursor'='null'::jsonb AND r.status IN ('running','queued')",
-  );
-  // Expired/retry-exhausted runs are finalized conservatively when a write was in flight.
-  await query(
-    "UPDATE runs r SET status=CASE WHEN EXISTS(SELECT 1 FROM tool_calls t WHERE t.run_id=r.id AND t.status IN ('running','needs_review')) OR EXISTS(SELECT 1 FROM email_sends e WHERE e.run_id=r.id AND e.status IN ('running','ambiguous','needs_review')) THEN 'needs_review' ELSE 'failed' END,error='Execution deadline exceeded; inspect tool calls and email sends before retrying.',finished_at=now() WHERE r.status IN ('running','queued') AND r.started_at < now()-interval '6 minutes'",
-  );
-  await query(
-    "UPDATE email_sends e SET status='needs_review',error=coalesce(e.error,'Email acceptance is uncertain after the execution deadline; check Resend') FROM runs r WHERE r.id=e.run_id AND r.status='needs_review' AND e.status IN ('running','ambiguous')",
-  );
-  await finalizeEmailSteps();
+  const boss = await getBoss();
+  for (const candidate of await query(
+    "SELECT id FROM runs r WHERE status IN ('running','queued') OR (status IN ('failed','needs_review') AND EXISTS(SELECT 1 FROM steps s WHERE s.run_id=r.id AND s.status IN ('running','retrying')))",
+  )) {
+    try {
+      await withRunLock(candidate.id, async () => {
+        const [run] = await query(
+          "SELECT r.*,c.state,v.snapshot FROM runs r JOIN versions v ON v.id=r.version_id LEFT JOIN checkpoints c ON c.run_id=r.id WHERE r.id=$1",
+          [candidate.id],
+        );
+        if (run && ["failed", "needs_review"].includes(run.status)) {
+          await query(
+            "UPDATE steps SET status=$2,output=jsonb_build_object('error',$3::text) WHERE run_id=$1 AND status IN ('running','retrying')",
+            [run.id, run.status, run.error],
+          );
+          return;
+        }
+        if (!run || !["running", "queued"].includes(run.status)) return;
+        if (hasTerminalCheckpoint(run.state)) {
+          await query(
+            "UPDATE runs SET status='succeeded',error=NULL,finished_at=coalesce(finished_at,now()) WHERE id=$1",
+            [run.id],
+          );
+          return;
+        }
+        const deadline =
+          run.deadline_at ??
+          (run.started_at
+            ? new Date(
+                new Date(run.started_at).getTime() +
+                  (run.snapshot.workflow.executionTimeoutSeconds ?? 300) * 1000,
+              )
+            : null);
+        if (!run.queue_job_id) {
+          const jobs = await boss.findJobs(QUEUE, { key: run.id });
+          const previous = jobs.sort(
+            (a, b) =>
+              new Date(b.createdOn).getTime() - new Date(a.createdOn).getTime(),
+          )[0];
+          if (previous) {
+            run.queue_job_id = previous.id;
+            await query("UPDATE runs SET queue_job_id=$2 WHERE id=$1", [
+              run.id,
+              previous.id,
+            ]);
+          }
+        }
+        const job = run.queue_job_id
+          ? await boss.getJobById(QUEUE, run.queue_job_id)
+          : undefined;
+        if (deadline && new Date(deadline).getTime() <= Date.now())
+          await recordRunFailure(run.id, "", new DeadlineError());
+        else if (
+          job === null ||
+          (job && ["failed", "cancelled", "completed"].includes(job.state))
+        )
+          await recordRunFailure(run.id, "", new RetryExhaustedError());
+      });
+    } catch (error) {
+      if (!(error instanceof RetryError)) throw error;
+    }
+  }
+  await dispatchSystemNotices();
+  await reconcileSystemNotices();
   for (const row of await query(
     "SELECT DISTINCT f.run_id FROM provider_files f JOIN runs r ON r.id=f.run_id WHERE r.status IN ('succeeded','failed','needs_review')",
   ))

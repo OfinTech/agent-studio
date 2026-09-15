@@ -1,6 +1,11 @@
+import { validateReplyEnvelope } from "./system-notice";
 import { Webhook } from "svix";
 import { z } from "zod";
-import type { Email, Attachment } from "../../contracts/src/index";
+import type {
+  Email,
+  Attachment,
+  ReplyEnvelope,
+} from "../../contracts/src/index";
 import { boundedRequest, NetworkError } from "./network";
 import { setting } from "../../persistence/src/settings";
 import { LocalStorage } from "./storage";
@@ -44,11 +49,23 @@ export async function retrieveEmail(
   id: string,
   storage = new LocalStorage(),
   signal?: AbortSignal,
+  options: {
+    requireAttachments?: boolean;
+    onEnvelope?: (envelope: ReplyEnvelope | null) => Promise<void>;
+    messageId?: string;
+  } = {},
 ): Promise<Email> {
   const mail = await resend(
     `/emails/receiving/${encodeURIComponent(providerId)}`,
     signal,
   );
+  const envelope = validateReplyEnvelope({
+    from: mail.from,
+    subject: mail.subject ?? "",
+    messageId: mail.message_id ?? options.messageId,
+    headers: mail.headers,
+  });
+  await options.onEnvelope?.(envelope);
   const attachments: Attachment[] = [];
   const limit = Number(setting("MAX_ATTACHMENT_BYTES") || 20971520);
   let total = 0;
@@ -96,12 +113,15 @@ export async function retrieveEmail(
       ),
     );
   }
-  if (!attachments.length)
+  if (!attachments.length && options.requireAttachments !== false)
     throw new Error("Email contains no supported attachments");
   return {
     id,
     from: mail.from,
-    ...(mail.message_id ? { messageId: mail.message_id } : {}),
+    ...((mail.message_id ?? options.messageId)
+      ? { messageId: mail.message_id ?? options.messageId }
+      : {}),
+    ...(envelope?.headers ? { headers: envelope.headers } : {}),
     to: mail.to,
     subject: mail.subject ?? "",
     text: mail.text ?? mail.html ?? "",

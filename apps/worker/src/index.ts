@@ -1,3 +1,5 @@
+import { executeSystemNotice } from "../../../packages/runtime/src/system-notices";
+import { NOTICE_QUEUE } from "../../../packages/runtime/src/service";
 import {
   getBoss,
   QUEUE,
@@ -8,9 +10,35 @@ import {
 import { pool } from "../../../packages/persistence/src/index";
 import { loadSettings } from "../../../packages/persistence/src/settings";
 const boss = await getBoss();
-await boss.work<{ runId: string }>(QUEUE, { batchSize: 1 }, async (jobs) => {
+await boss.work<
+  { runId: string },
+  void,
+  { batchSize: number; includeMetadata: true }
+>(QUEUE, { batchSize: 1, includeMetadata: true }, async (jobs) => {
   await loadSettings();
-  for (const job of jobs) await executeRun(job.data.runId);
+  for (const job of jobs)
+    await executeRun(job.data.runId, {
+      attempt: {
+        jobId: job.id,
+        retryCount: job.retryCount,
+        retryLimit: job.retryLimit,
+        signal: job.signal,
+      },
+    });
+});
+await boss.work<
+  { runId: string },
+  void,
+  { batchSize: number; includeMetadata: true }
+>(NOTICE_QUEUE, { batchSize: 1, includeMetadata: true }, async (jobs) => {
+  await loadSettings();
+  for (const job of jobs)
+    await executeSystemNotice(job.data.runId, {
+      jobId: job.id,
+      retryCount: job.retryCount,
+      retryLimit: job.retryLimit,
+      signal: job.signal,
+    });
 });
 let maintaining = false;
 async function tick() {

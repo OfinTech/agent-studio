@@ -145,6 +145,41 @@ export function RunInspector({
                 {run.error}
               </Alert>
             )}
+            {run.systemNotices?.map((notice, index) => (
+              <Stack gap="md" key={index} data-testid="system-notice">
+                <Title order={3}>System-error notice</Title>
+                <Badge color={statusColor(notice.status)}>
+                  {notice.status === "preview"
+                    ? "Preview only"
+                    : notice.status === "succeeded"
+                      ? "Accepted by Resend"
+                      : notice.status === "needs_review"
+                        ? "Uncertain delivery"
+                        : statusLabel(notice.status)}
+                </Badge>
+                {notice.suppression_reason && (
+                  <Text>Suppressed: {notice.suppression_reason}</Text>
+                )}
+                {notice.error && <Alert color="red">{notice.error}</Alert>}
+                {notice.message && (
+                  <>
+                    <Text>From: {notice.message.from}</Text>
+                    <Text>To: {notice.message.to.join(", ")}</Text>
+                    <Text>Subject: {notice.message.subject}</Text>
+                    <Stack gap="md">
+                      {notice.message.text
+                        .split("\n\n")
+                        .map((paragraph, index) => (
+                          <Text key={index}>{paragraph}</Text>
+                        ))}
+                    </Stack>
+                  </>
+                )}
+                {notice.provider_email_id && (
+                  <Text>Acceptance ID: {notice.provider_email_id}</Text>
+                )}
+              </Stack>
+            ))}
             <Title order={3}>Steps</Title>
             {!run.steps?.length && <Text>No steps yet.</Text>}
             <Accordion multiple>
@@ -190,13 +225,14 @@ export function RunInspector({
               .filter(
                 (n) =>
                   n.type !== "tool" &&
+                  n.type !== "pdf_template" &&
                   !run.steps?.some((s) => s.node_id === n.id),
               )
               .map((n) => (
                 <Text key={n.id}>
                   {n.data.label}:{" "}
                   {["succeeded", "failed", "needs_review"].includes(run.status)
-                    ? "Not executed"
+                    ? "Not run"
                     : "Pending"}
                 </Text>
               ))}

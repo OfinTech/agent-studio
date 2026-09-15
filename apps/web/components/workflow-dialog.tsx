@@ -5,6 +5,7 @@ import {
   Group,
   Modal,
   NativeSelect,
+  NumberInput,
   Select,
   Stack,
   Text,
@@ -159,12 +160,19 @@ export function WorkflowSettings({
   controller: PlatformController;
 }) {
   const form = useForm({
-    initialValues: { name: "" },
-    validate: { name: isNotEmpty("Enter a workflow name") },
+    initialValues: { name: "", executionMinutes: 5 },
+    validate: {
+      name: isNotEmpty("Enter a workflow name"),
+      executionMinutes: (value) =>
+        value >= 1 && value <= 10 ? null : "Use 1–10 minutes",
+    },
   });
   useEffect(() => {
     if (c.modal === "workflow-settings") {
-      form.setValues({ name: c.draft?.name ?? "" });
+      form.setValues({
+        name: c.draft?.name ?? "",
+        executionMinutes: (c.draft?.executionTimeoutSeconds ?? 300) / 60,
+      });
       form.clearErrors();
     }
   }, [c.modal]);
@@ -177,8 +185,13 @@ export function WorkflowSettings({
     >
       <form
         noValidate
-        onSubmit={form.onSubmit(({ name }) => {
-          if (c.draft && name !== c.draft.name) c.update({ ...c.draft, name });
+        onSubmit={form.onSubmit(({ name, executionMinutes }) => {
+          if (c.draft)
+            c.update({
+              ...c.draft,
+              name,
+              executionTimeoutSeconds: Math.round(executionMinutes * 60),
+            });
           c.setModal(null);
         })}
       >
@@ -188,6 +201,14 @@ export function WorkflowSettings({
             required
             data-autofocus
             {...form.getInputProps("name")}
+          />
+          <NumberInput
+            label="Execution time (minutes)"
+            min={1}
+            max={10}
+            step={1}
+            required
+            {...form.getInputProps("executionMinutes")}
           />
           <Group justify="space-between">
             <Button type="submit">Apply</Button>

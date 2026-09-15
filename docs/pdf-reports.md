@@ -16,7 +16,7 @@ Supported packages: `geometry`, `amsmath`, `amssymb`, `array`, `booktabs`, `long
 | Compilation plus validation | 30 seconds per attempt                                                     |
 | PDF                         | 1–20 pages, at most 10 MiB, readable, unencrypted, nonempty extracted text |
 | Distinct sources            | Three per Agent, including invalid sources                                 |
-| Existing execution budget   | Ten turns per Agent, five minutes per run                                  |
+| Existing execution budget   | Ten turns per Agent, configured 1–10 minutes per run                       |
 | Retention                   | Seven days after terminal execution                                        |
 
 The most recent attempt determines the current report. A failure clears the previous candidate; repeating successful source reuses its immutable file and makes it current again, even after the three-source limit. A duplicate tool-call identity replays its recorded result. Infrastructure interruption resumes the same ledger entry without becoming an ambiguous external API write. Bytes are flushed before the metadata/result transaction acknowledges success. Checkpoints contain references and bounded tool responses, never binary files.

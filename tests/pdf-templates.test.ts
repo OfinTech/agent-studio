@@ -1,3 +1,4 @@
+import { claudeResponse } from "./helpers/claude-stream";
 import { receiptWorkflow, receiptTool } from "../fixtures/receipt-workflow";
 import { it, expect } from "vitest";
 import {
@@ -52,22 +53,15 @@ for (const providerName of ["gemini", "openai", "claude"] as const) {
                     }),
                   ),
               )
-            : new ClaudeProvider(
-                "synthetic",
-                async () =>
-                  new Response(
-                    JSON.stringify({
-                      stop_reason: "tool_use",
-                      content: [
-                        {
-                          type: "tool_use",
-                          id: "template-call",
-                          name: definition.name,
-                          input: args,
-                        },
-                      ],
-                    }),
-                  ),
+            : new ClaudeProvider("synthetic", async () =>
+                claudeResponse([
+                  {
+                    type: "tool_use",
+                    id: "template-call",
+                    name: definition.name,
+                    input: args,
+                  },
+                ]),
               );
       if (provider instanceof GeminiProvider)
         provider.ai = {

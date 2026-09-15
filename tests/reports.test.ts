@@ -1,3 +1,4 @@
+import { claudeResponse } from "./helpers/claude-stream";
 import { receiptWorkflow, receiptTool } from "../fixtures/receipt-workflow";
 import {
   defaultPdfTemplate,
@@ -163,26 +164,20 @@ for (const kind of ["gemini", "openai", "claude"] as const) {
       payload = generateContent.mock.calls[0][0];
       expect((payload as any).contents).toEqual(messages);
     } else {
-      const request = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify(
-              kind === "openai"
-                ? {
-                    status: "completed",
-                    output: [
-                      {
-                        type: "message",
-                        content: [{ type: "output_text", text: "done" }],
-                      },
-                    ],
-                  }
-                : {
-                    stop_reason: "end_turn",
-                    content: [{ type: "text", text: "done" }],
+      const request = vi.fn(async () =>
+        kind === "openai"
+          ? new Response(
+              JSON.stringify({
+                status: "completed",
+                output: [
+                  {
+                    type: "message",
+                    content: [{ type: "output_text", text: "done" }],
                   },
-            ),
-          ),
+                ],
+              }),
+            )
+          : claudeResponse([{ type: "text", text: "done" }], "end_turn"),
       );
       const provider =
         kind === "openai"

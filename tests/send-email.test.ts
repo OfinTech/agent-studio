@@ -24,10 +24,142 @@ import {
   NetworkError,
 } from "../packages/connectors/src/network";
 import { settings } from "../packages/persistence/src/settings";
+import {
+  validateReplyEnvelope,
+  noticeSuppression,
+  systemNoticeMessage,
+} from "../packages/connectors/src/system-notice";
 vi.mock("../packages/connectors/src/network", async (original) => ({
   ...(await original<object>()),
   boundedRequest: vi.fn(),
 }));
+
+it("validates notice destinations and suppresses automatic messages and self-replies", () => {
+  const envelope = {
+    from: "Sender <sender@example.com>",
+    subject: "Brief",
+    messageId: "<original@example.com>",
+  };
+  expect(validateReplyEnvelope(envelope)).toEqual(envelope);
+  for (const value of [
+    { ...envelope, from: "bad" },
+    { ...envelope, messageId: "bad" },
+    { ...envelope, subject: "Injected\r\nHeader" },
+  ])
+    expect(validateReplyEnvelope(value)).toBeNull();
+  for (const headers of [
+    { "Auto-Submitted": "auto-generated" },
+    { Precedence: "bulk" },
+    { "List-Id": "list" },
+    { "X-Auto-Response-Suppress": "All" },
+  ] as Record<string, string>[])
+    expect(
+      noticeSuppression({ ...envelope, headers }, "inbox@example.com"),
+    ).toBe("Automatic message");
+  expect(noticeSuppression(envelope, "sender@example.com")).toBe("Self-reply");
+  expect(
+    noticeSuppression(
+      { ...envelope, from: "no-reply@example.com" },
+      "inbox@example.com",
+    ),
+  ).toBe("Automatic message");
+  expect(
+    noticeSuppression(
+      { ...envelope, headers: { "Auto-Submitted": "no" } },
+      "inbox@example.com",
+    ),
+  ).toBeNull();
+  const notice = systemNoticeMessage(
+    "run-1",
+    "inbox@example.com",
+    envelope,
+    "Provider SECRET upstream",
+  );
+  expect(notice.headers).toMatchObject({
+    "In-Reply-To": envelope.messageId,
+    References: envelope.messageId,
+  });
+  expect(notice.text).toContain("Run ID: run-1");
+  expect(notice.text).not.toContain("SECRET");
+  expect(notice.attachments).toBeUndefined();
+});
+
+it.each([false, true])(
+  "retrieval validates the envelope before enforcing required attachments (%s)",
+  async (required) => {
+    settings.set("RESEND_API_KEY", "synthetic");
+    vi.mocked(boundedRequest).mockResolvedValueOnce({
+      status: 200,
+      body: Buffer.from(
+        JSON.stringify({
+          from: "sender@example.com",
+          to: ["inbox@example.com"],
+          subject: "Brief",
+          text: "Email only",
+          attachments: [],
+        }),
+      ),
+    });
+    const onEnvelope = vi.fn();
+    const call = retrieveEmail(
+      "provider",
+      "email",
+      new LocalStorage(),
+      undefined,
+      { requireAttachments: required, onEnvelope },
+    );
+    if (required)
+      await expect(call).rejects.toThrow("no supported attachments");
+    else
+      expect(await call).toMatchObject({ text: "Email only", attachments: [] });
+    expect(onEnvelope).toHaveBeenCalledWith({
+      from: "sender@example.com",
+      subject: "Brief",
+      messageId: undefined,
+      headers: undefined,
+    });
+  },
+);
+
+it.each(["unsupported", "oversized", "corrupt"])(
+  "optional attachments still reject %s supplied files after saving the envelope",
+  async (kind) => {
+    settings.set("RESEND_API_KEY", "synthetic");
+    const mail = {
+      from: "sender@example.com",
+      subject: "Brief",
+      attachments: [
+        {
+          id: "a",
+          content_type:
+            kind === "unsupported" ? "text/plain" : "application/pdf",
+          size: kind === "oversized" ? 100000000 : 10,
+        },
+      ],
+    };
+    vi.mocked(boundedRequest).mockResolvedValueOnce({
+      status: 200,
+      body: Buffer.from(JSON.stringify(mail)),
+    });
+    if (kind === "corrupt")
+      vi.mocked(boundedRequest)
+        .mockResolvedValueOnce({
+          status: 200,
+          body: Buffer.from('{"download_url":"https://example.com/file"}'),
+        })
+        .mockResolvedValueOnce({ status: 200, body: Buffer.from("corrupt") });
+    const onEnvelope = vi.fn();
+    await expect(
+      retrieveEmail("p", "e", new LocalStorage(), undefined, {
+        requireAttachments: false,
+        onEnvelope,
+      }),
+    ).rejects.toThrow();
+    expect(onEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({ from: mail.from }),
+    );
+  },
+);
 const node: WorkflowNode = {
   id: "reply",
   type: "send_email",

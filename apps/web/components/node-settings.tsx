@@ -66,6 +66,13 @@ export function NodeSettings({
               onChange={(e) => patchNode({ recipient: e.target.value })}
               description="Use a unique address routed through Resend to your signed inbound webhook."
             />
+            <Checkbox
+              label="Send system-error notices"
+              checked={node.data.sendFailureNotice ?? true}
+              onChange={(event) =>
+                patchNode({ sendFailureNotice: event.currentTarget.checked })
+              }
+            />
           </>
         )}
         {node.type === "send_email" && draft && (
@@ -78,6 +85,13 @@ export function NodeSettings({
         )}
         {node.type === "upload" && (
           <>
+            <Checkbox
+              label="Require attachments"
+              checked={node.data.requireAttachments ?? true}
+              onChange={(event) =>
+                patchNode({ requireAttachments: event.currentTarget.checked })
+              }
+            />
             <Text>Accepted attachments</Text>
             {(["application/pdf", "image/jpeg", "image/png"] as const).map(
               (mime) => (
